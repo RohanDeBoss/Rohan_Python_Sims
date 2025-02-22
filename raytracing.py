@@ -9,9 +9,9 @@ MAX_BOUNCES = 3  # Maximum recursion depth (number of light bounces)
 # ---------------- Resolution & Camera Settings ----------------
 WINDOW_HEIGHT = 500   # Display window height
 WINDOW_WIDTH = int(WINDOW_HEIGHT * 1.5)   # Display window width
-RENDER_HEIGHT = 500   # Low-res render height
-RENDER_WIDTH = int(RENDER_HEIGHT * 1.5)    # Low-res render width
-CAMERA_POS = np.array([150, 100, -1000], dtype=np.float32)  # Explicit camera position in low-res space
+RENDER_HEIGHT = 250   # render height
+RENDER_WIDTH = int(RENDER_HEIGHT * 1.5)    # render width
+CAMERA_POS = np.array([150, 97, -800], dtype=np.float32)  # Explicit camera position in low-res space
 
 # ---------------- Utility Functions ----------------
 def normalize(v):
@@ -198,11 +198,17 @@ current_iter = 0
 executor = ThreadPoolExecutor(max_workers=1)
 iteration_future = executor.submit(render_full)
 rendering = True
-last_update = time.time()
+start_time = time.time()  # Start time for iterations per minute
 
 # ---------------- Main Loop ----------------
+# Initialize before the main loop
+last_ipm = 0.0
+start_time = time.time()       # Overall start time (if needed)
+last_iter_time = start_time    # Time of the last iteration
+
 running = True
 while running:
+    # Process events
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
@@ -212,11 +218,14 @@ while running:
                 accumulated.fill(0)
                 iteration_future = executor.submit(render_full)
                 rendering = True
+                start_time = time.time()       # Reset overall start time if desired
+                last_iter_time = start_time    # Reset the iteration timer as well
             elif event.key == pygame.K_SPACE:
                 rendering = not rendering
             elif event.key == pygame.K_q:
                 running = False
 
+    # Process render iteration (update only when one finishes)
     if rendering and iteration_future.done():
         new_image = iteration_future.result()
         current_iter += 1
@@ -225,18 +234,24 @@ while running:
         else:
             accumulated = (accumulated * (current_iter - 1) + new_image) / current_iter
         iteration_future = executor.submit(render_full)
-    
+        
+        # Update iterations per minute only on iteration completion:
+        now = time.time()
+        delta = now - last_iter_time  # Time taken for the last iteration
+        if delta > 0:
+            last_ipm = 60.0 / delta  # One iteration took delta seconds; scale to minutes.
+        last_iter_time = now  # Reset timer for next iteration
+
+    # Draw the rendered image
     disp_array = np.clip(accumulated, 0, 255).astype(np.uint8)
     lowres_surf = pygame.surfarray.make_surface(disp_array.transpose(1, 0, 2))
     scaled_surf = pygame.transform.scale(lowres_surf, (WINDOW_WIDTH, WINDOW_HEIGHT))
     screen.blit(scaled_surf, (0, 0))
     
-    current_time = time.time()
-    fps = 1.0 / (current_time - last_update + 1e-6)
-    last_update = current_time
+    # Draw UI text (updated every tick, but last_ipm remains constant until a new iteration)
     ui_lines = [
-        f"FPS: {fps:.1f}",
-        f"Iterations: {current_iter}",
+        f"Iter/min: {last_ipm:.2f}",
+        f"Total Iterations: {current_iter}",
         "R: Reset  |  Space: Toggle Rendering  |  Q: Quit"
     ]
     for i, line in enumerate(ui_lines):
@@ -245,6 +260,7 @@ while running:
     
     pygame.display.flip()
     clock.tick(60)
+
 
 pygame.quit()
 executor.shutdown()
