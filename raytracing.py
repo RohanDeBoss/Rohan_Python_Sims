@@ -7,10 +7,10 @@ from concurrent.futures import ThreadPoolExecutor
 MAX_BOUNCES = 3  # Maximum recursion depth (number of light bounces)
 
 # ---------------- Resolution & Camera Settings ----------------
-WINDOW_WIDTH = 600   # Display window width
-WINDOW_HEIGHT = 400   # Display window height
-RENDER_WIDTH = 300    # Low-res render width
-RENDER_HEIGHT = 200   # Low-res render height
+WINDOW_HEIGHT = 500   # Display window height
+WINDOW_WIDTH = int(WINDOW_HEIGHT * 1.5)   # Display window width
+RENDER_HEIGHT = 500   # Low-res render height
+RENDER_WIDTH = int(RENDER_HEIGHT * 1.5)    # Low-res render width
 CAMERA_POS = np.array([150, 100, -1000], dtype=np.float32)  # Explicit camera position in low-res space
 
 # ---------------- Utility Functions ----------------
@@ -160,20 +160,36 @@ def trace_ray(ray_origin, ray_dir, depth=MAX_BOUNCES):
         return floor_color * diffuse
 
 # ---------------- Rendering Function ----------------
-# Render at low resolution (RENDER_WIDTH x RENDER_HEIGHT) for speed; then upscale.
 def render_full():
     result = np.zeros((RENDER_HEIGHT, RENDER_WIDTH, 3), dtype=np.float32)
-    # Use the explicit CAMERA_POS variable
     ray_origin = CAMERA_POS.copy()
+    
+    # Define the world dimensions for the image plane.
+    # These remain fixed so the scene stays the same regardless of render resolution.
+    scene_width = 300
+    scene_height = 200
+    
+    # Compute the left and top of the image plane in world coordinates,
+    # centering it at (CAMERA_POS[0], CAMERA_POS[1]).
+    left = CAMERA_POS[0] - scene_width / 2
+    top = CAMERA_POS[1] - scene_height / 2
+    
     for y in range(RENDER_HEIGHT):
         for x in range(RENDER_WIDTH):
             # Random jitter for anti-aliasing
             jitter_x, jitter_y = np.random.rand(), np.random.rand()
-            sample_pos = np.array([x + jitter_x, y + jitter_y, 0], dtype=np.float32)
+            
+            # Map the pixel coordinate to a world coordinate on the image plane
+            u = left + (x + jitter_x) * (scene_width / RENDER_WIDTH)
+            v = top + (y + jitter_y) * (scene_height / RENDER_HEIGHT)
+            sample_pos = np.array([u, v, 0], dtype=np.float32)
+            
+            # Calculate the ray direction so that the camera always points towards the center of the scene.
             ray_dir = normalize(sample_pos - ray_origin)
             color = trace_ray(ray_origin, ray_dir, MAX_BOUNCES)
             result[y, x] = color * 255
     return result
+
 
 # ---------------- Progressive Rendering Setup ----------------
 accumulated = np.zeros((RENDER_HEIGHT, RENDER_WIDTH, 3), dtype=np.float32)
