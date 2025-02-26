@@ -500,8 +500,8 @@ def main():
     pygame.mouse.set_visible(False)
     pygame.event.set_grab(True)
 
-    terrain_texture_id = load_texture("images/terrainsmall.jpg")
-    water_texture_id = load_texture("images/water.jpg")
+    terrain_texture_id = load_texture("Rohan_Python_Sims/Images/terrainsmall.jpg")
+    water_texture_id = load_texture("Rohan_Python_Sims/Images/water.jpg")
 
     glEnable(GL_DEPTH_TEST)
     glEnable(GL_TEXTURE_2D)
