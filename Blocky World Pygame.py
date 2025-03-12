@@ -21,7 +21,7 @@ VIEW_DISTANCE = 16  # Render distance in chunks
 SEED = random.randint(0, 100000)  # Seed for procedural generation
 
 # Global thread pool for asynchronous mesh generation.
-executor = ThreadPoolExecutor(max_workers=4)
+executor = ThreadPoolExecutor(max_workers=6)
 
 # --- Noise Generation ---
 noise_generator = OpenSimplex(seed=SEED)
@@ -86,19 +86,20 @@ def extract_frustum_planes(proj, modl):
     return planes
 
 def is_chunk_in_frustum(chunk_x, chunk_z, planes):
-    center = np.array([
-        chunk_x * CHUNK_SIZE + CHUNK_SIZE / 2,
-        255 / 2,  # Using 255 as max vertical range
-        chunk_z * CHUNK_SIZE + CHUNK_SIZE / 2,
-        1.0
-    ], dtype=np.float32)
-    radius = math.sqrt((CHUNK_SIZE/2)**2 + (CHUNK_SIZE/2)**2 + (255/2)**2)
+    min_x = chunk_x * CHUNK_SIZE
+    max_x = min_x + CHUNK_SIZE
+    min_y = 0  # Minimum height
+    max_y = 255  # Maximum height
+    min_z = chunk_z * CHUNK_SIZE
+    max_z = min_z + CHUNK_SIZE
+    
     for plane in planes:
-        distance = (plane[0] * center[0] +
-                    plane[1] * center[1] +
-                    plane[2] * center[2] +
-                    plane[3])
-        if distance < -radius:
+        px = max_x if plane[0] > 0 else min_x
+        py = max_y if plane[1] > 0 else min_y
+        pz = max_z if plane[2] > 0 else min_z
+        
+        positive_dist = plane[0] * px + plane[1] * py + plane[2] * pz + plane[3]
+        if positive_dist < 0:
             return False
     return True
 
@@ -119,12 +120,13 @@ def setup_lighting():
 class Chunk:
     # Predefined constants for efficiency
     TEX_COORDS = {
-        "grass": [(0, 1), (1, 1), (1, 0), (0, 0)],
-        "dirt": [(2, 0), (3, 0), (3, 1), (2, 1)],
-        "stone": [(1, 0), (2, 0), (2, 1), (1, 1)],
-        "log": [(4, 1), (5, 1), (5, 0), (4, 0)],
-        "leaves": [(4, 3), (5, 3), (5, 2), (4, 2)],
-        "water": [(0, 0), (1, 0), (1, 1), (0, 1)],
+        "grass": [(0, 1), (1, 1), (1, 0), (0, 0)],      # Atlas coords for grass
+        "dirt": [(2, 0), (3, 0), (3, 1), (2, 1)],       # Atlas coords for dirt
+        "stone": [(1, 0), (2, 0), (2, 1), (1, 1)],      # Atlas coords for stone
+        "log": [(4, 1), (5, 1), (5, 0), (4, 0)],        # Atlas coords for log
+        "leaves": [(0, 0), (1, 0), (1, 1), (0, 1)],     # Full texture for leaves
+        "water": [(0, 0), (1, 0), (1, 1), (0, 1)],      # Full texture for water
+        "sand": [(0, 0), (1, 0), (1, 1), (0, 1)],       # Full texture for sand
     }
     FACE_VERTICES = {
         "top": [(0, 1, 0), (1, 1, 0), (1, 1, 1), (0, 1, 1)],
@@ -150,10 +152,16 @@ class Chunk:
         self.generate()
         self.vbo_id = glGenBuffers(1)
         self.water_vbo_id = glGenBuffers(1)
+        self.leaves_vbo_id = glGenBuffers(1)
+        self.sand_vbo_id = glGenBuffers(1)  # New VBO for sand
         self.terrain_data = None
         self.water_data = None
+        self.leaves_data = None
+        self.sand_data = None
         self.num_vertices = 0
         self.num_water_vertices = 0
+        self.num_leaves_vertices = 0
+        self.num_sand_vertices = 0
         self.is_dirty = True
         self.future = executor.submit(self.generate_mesh_async)
 
@@ -162,6 +170,18 @@ class Chunk:
         glMaterialfv(GL_FRONT, GL_DIFFUSE, (0.2, 0.4, 0.8, 0.6))
         glMaterialfv(GL_FRONT, GL_SPECULAR, (0.9, 0.9, 1.0, 0.7))
         glMaterialf(GL_FRONT, GL_SHININESS, 96.0)
+
+    def set_leaves_material(self):
+        glMaterialfv(GL_FRONT, GL_AMBIENT, (0.1, 0.3, 0.1, 1.0))
+        glMaterialfv(GL_FRONT, GL_DIFFUSE, (0.2, 0.6, 0.2, 1.0))
+        glMaterialfv(GL_FRONT, GL_SPECULAR, (0.3, 0.5, 0.3, 1.0))
+        glMaterialf(GL_FRONT, GL_SHININESS, 32.0)
+
+    def set_sand_material(self):
+        glMaterialfv(GL_FRONT, GL_AMBIENT, (0.7, 0.6, 0.3, 1.0))
+        glMaterialfv(GL_FRONT, GL_DIFFUSE, (0.9, 0.8, 0.5, 1.0))
+        glMaterialfv(GL_FRONT, GL_SPECULAR, (0.2, 0.2, 0.1, 1.0))
+        glMaterialf(GL_FRONT, GL_SHININESS, 10.0)
 
     def generate(self):
         for x in range(CHUNK_SIZE):
@@ -182,22 +202,27 @@ class Chunk:
                         elif biome == "water":
                             self.blocks[(x, y, z)] = "water"
                         elif biome == "mountain":
-                            self.blocks[(x, y, z)] = "stone"
+                            if random.random() < 0.5:  # 50% chance for sand on mountain surface
+                                self.blocks[(x, y, z)] = "sand"
+                            else:
+                                self.blocks[(x, y, z)] = "stone"
 
                 if biome == "forest" and random.random() < 0.1 and height > 0:
                     tree_height = random.randint(4, 7)
                     for y in range(height + 1, height + tree_height):
                         self.blocks[(x, y, z)] = "log"
                     for ly in range(height + tree_height - 2, height + tree_height + 1):
-                        for lx in range(x - 2, x + 3):
-                            for lz in range(z - 2, z + 3):
+                        for lx in range(max(x - 2, 0), min(x + 3, CHUNK_SIZE)):
+                            for lz in range(max(z - 2, 0), min(z + 3, CHUNK_SIZE)):
                                 if (lx, ly, lz) not in self.blocks:
-                                    self.blocks[(lx - self.x * CHUNK_SIZE, ly, lz - self.z * CHUNK_SIZE)] = "leaves"
+                                    self.blocks[(lx, ly, lz)] = "leaves"
 
     def generate_mesh_async(self):
         terrain_data = []
         water_data = []
-        blocks = self.blocks  # Local reference for faster access
+        leaves_data = []
+        sand_data = []
+        blocks = self.blocks
 
         def add_face(x, y, z, face_type, block_type, data_list):
             norm = (0, 1, 0) if block_type == "water" else self.NORMALS[face_type]
@@ -210,23 +235,31 @@ class Chunk:
 
         for (x, y, z), block_type in blocks.items():
             if block_type == "water":
-                # Only check top face for water, sides handled with general logic
                 if (x, y + 1, z) not in blocks:
                     add_face(x, y, z, "top", "water", water_data)
             if block_type != "air":
-                # Single loop for all faces
                 for face_type, (dx, dy, dz) in self.FACE_DIRECTIONS:
                     neighbor = (x + dx, y + dy, z + dz)
                     neighbor_block = blocks.get(neighbor)
                     if neighbor_block is None or (block_type != "water" and neighbor_block == "water") or \
                        (block_type == "water" and neighbor_block != "water"):
-                        add_face(x, y, z, face_type, block_type, 
-                                water_data if block_type == "water" else terrain_data)
+                        if block_type == "water":
+                            add_face(x, y, z, face_type, block_type, water_data)
+                        elif block_type == "leaves":
+                            add_face(x, y, z, face_type, block_type, leaves_data)
+                        elif block_type == "sand":
+                            add_face(x, y, z, face_type, block_type, sand_data)
+                        else:
+                            add_face(x, y, z, face_type, block_type, terrain_data)
 
         self.terrain_data = np.array(terrain_data, dtype=np.float32)
         self.water_data = np.array(water_data, dtype=np.float32)
+        self.leaves_data = np.array(leaves_data, dtype=np.float32)
+        self.sand_data = np.array(sand_data, dtype=np.float32)
         self.num_vertices = len(terrain_data) // 8
         self.num_water_vertices = len(water_data) // 8
+        self.num_leaves_vertices = len(leaves_data) // 8
+        self.num_sand_vertices = len(sand_data) // 8
 
     def upload_mesh(self):
         if self.terrain_data is not None:
@@ -237,6 +270,20 @@ class Chunk:
             glBindBuffer(GL_ARRAY_BUFFER, self.water_vbo_id)
             if self.num_water_vertices > 0:
                 glBufferData(GL_ARRAY_BUFFER, self.water_data.nbytes, self.water_data, GL_STATIC_DRAW)
+            else:
+                glBufferData(GL_ARRAY_BUFFER, 0, None, GL_STATIC_DRAW)
+            glBindBuffer(GL_ARRAY_BUFFER, 0)
+        if self.leaves_data is not None:
+            glBindBuffer(GL_ARRAY_BUFFER, self.leaves_vbo_id)
+            if self.num_leaves_vertices > 0:
+                glBufferData(GL_ARRAY_BUFFER, self.leaves_data.nbytes, self.leaves_data, GL_STATIC_DRAW)
+            else:
+                glBufferData(GL_ARRAY_BUFFER, 0, None, GL_STATIC_DRAW)
+            glBindBuffer(GL_ARRAY_BUFFER, 0)
+        if self.sand_data is not None:
+            glBindBuffer(GL_ARRAY_BUFFER, self.sand_vbo_id)
+            if self.num_sand_vertices > 0:
+                glBufferData(GL_ARRAY_BUFFER, self.sand_data.nbytes, self.sand_data, GL_STATIC_DRAW)
             else:
                 glBufferData(GL_ARRAY_BUFFER, 0, None, GL_STATIC_DRAW)
             glBindBuffer(GL_ARRAY_BUFFER, 0)
@@ -281,18 +328,52 @@ class Chunk:
         glDisableClientState(GL_NORMAL_ARRAY)
         glBindBuffer(GL_ARRAY_BUFFER, 0)
 
+    def render_leaves(self):
+        self.check_mesh_update()
+        if self.is_dirty or self.num_leaves_vertices == 0:
+            return
+        glBindBuffer(GL_ARRAY_BUFFER, self.leaves_vbo_id)
+        self.set_leaves_material()
+        glEnableClientState(GL_VERTEX_ARRAY)
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY)
+        glEnableClientState(GL_NORMAL_ARRAY)
+        glVertexPointer(3, GL_FLOAT, 8 * 4, ctypes.c_void_p(0))
+        glTexCoordPointer(2, GL_FLOAT, 8 * 4, ctypes.c_void_p(3 * 4))
+        glNormalPointer(GL_FLOAT, 8 * 4, ctypes.c_void_p(5 * 4))
+        glDrawArrays(GL_QUADS, 0, self.num_leaves_vertices)
+        glDisableClientState(GL_VERTEX_ARRAY)
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY)
+        glDisableClientState(GL_NORMAL_ARRAY)
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
+
+    def render_sand(self):
+        self.check_mesh_update()
+        if self.is_dirty or self.num_sand_vertices == 0:
+            return
+        glBindBuffer(GL_ARRAY_BUFFER, self.sand_vbo_id)
+        self.set_sand_material()
+        glEnableClientState(GL_VERTEX_ARRAY)
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY)
+        glEnableClientState(GL_NORMAL_ARRAY)
+        glVertexPointer(3, GL_FLOAT, 8 * 4, ctypes.c_void_p(0))
+        glTexCoordPointer(2, GL_FLOAT, 8 * 4, ctypes.c_void_p(3 * 4))
+        glNormalPointer(GL_FLOAT, 8 * 4, ctypes.c_void_p(5 * 4))
+        glDrawArrays(GL_QUADS, 0, self.num_sand_vertices)
+        glDisableClientState(GL_VERTEX_ARRAY)
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY)
+        glDisableClientState(GL_NORMAL_ARRAY)
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
+
 # --- World Management ---
 class World:
     def __init__(self):
         self.chunks = {}
-        self.pending_chunks = set()  # Chunks being preloaded
-        self.max_preload_distance = VIEW_DISTANCE + 2  # Preload slightly beyond render distance
+        self.pending_chunks = set()
+        self.max_preload_distance = VIEW_DISTANCE + 2
 
     def preload_chunks(self, player_x, player_z):
         chunk_x = int(player_x // CHUNK_SIZE)
         chunk_z = int(player_z // CHUNK_SIZE)
-
-        # Determine chunks to preload
         for x in range(chunk_x - self.max_preload_distance, chunk_x + self.max_preload_distance + 1):
             for z in range(chunk_z - self.max_preload_distance, chunk_z + self.max_preload_distance + 1):
                 if (x, z) not in self.chunks and (x, z) not in self.pending_chunks:
@@ -301,13 +382,12 @@ class World:
 
     def preload_chunk(self, x, z):
         chunk = Chunk(x, z)
-        with threading.Lock():  # Ensure thread-safe access to chunks dict
+        with threading.Lock():
             self.chunks[(x, z)] = chunk
         self.pending_chunks.remove((x, z))
 
     def get_chunk(self, x, z):
         if (x, z) not in self.chunks:
-            # If not preloaded, create synchronously as a fallback (rare case)
             self.chunks[(x, z)] = Chunk(x, z)
         return self.chunks[(x, z)]
 
@@ -318,6 +398,10 @@ class World:
         modelview_matrix = glGetDoublev(GL_MODELVIEW_MATRIX)
         planes = extract_frustum_planes(proj_matrix, modelview_matrix)
 
+        # Render terrain
+        glEnableClientState(GL_VERTEX_ARRAY)
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY)
+        glEnableClientState(GL_NORMAL_ARRAY)
         for x in range(chunk_x - VIEW_DISTANCE, chunk_x + VIEW_DISTANCE + 1):
             for z in range(chunk_z - VIEW_DISTANCE, chunk_z + VIEW_DISTANCE + 1):
                 if is_chunk_in_frustum(x, z, planes):
@@ -326,10 +410,49 @@ class World:
                     glTranslatef(x * CHUNK_SIZE, 0, z * CHUNK_SIZE)
                     chunk.render()
                     glPopMatrix()
+        glDisableClientState(GL_VERTEX_ARRAY)
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY)
+        glDisableClientState(GL_NORMAL_ARRAY)
 
+        # Render sand
+        glEnableClientState(GL_VERTEX_ARRAY)
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY)
+        glEnableClientState(GL_NORMAL_ARRAY)
+        for x in range(chunk_x - VIEW_DISTANCE, chunk_x + VIEW_DISTANCE + 1):
+            for z in range(chunk_z - VIEW_DISTANCE, chunk_z + VIEW_DISTANCE + 1):
+                if is_chunk_in_frustum(x, z, planes):
+                    chunk = self.get_chunk(x, z)
+                    glPushMatrix()
+                    glTranslatef(x * CHUNK_SIZE, 0, z * CHUNK_SIZE)
+                    chunk.render_sand()
+                    glPopMatrix()
+        glDisableClientState(GL_VERTEX_ARRAY)
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY)
+        glDisableClientState(GL_NORMAL_ARRAY)
+
+        # Render leaves with blending
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glEnableClientState(GL_VERTEX_ARRAY)
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY)
+        glEnableClientState(GL_NORMAL_ARRAY)
+        for x in range(chunk_x - VIEW_DISTANCE, chunk_x + VIEW_DISTANCE + 1):
+            for z in range(chunk_z - VIEW_DISTANCE, chunk_z + VIEW_DISTANCE + 1):
+                if is_chunk_in_frustum(x, z, planes):
+                    chunk = self.get_chunk(x, z)
+                    glPushMatrix()
+                    glTranslatef(x * CHUNK_SIZE, 0, z * CHUNK_SIZE)
+                    chunk.render_leaves()
+                    glPopMatrix()
+        glDisableClientState(GL_VERTEX_ARRAY)
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY)
+        glDisableClientState(GL_NORMAL_ARRAY)
+
+        # Render water with blending
         glDepthMask(GL_FALSE)
+        glEnableClientState(GL_VERTEX_ARRAY)
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY)
+        glEnableClientState(GL_NORMAL_ARRAY)
         for x in range(chunk_x - VIEW_DISTANCE, chunk_x + VIEW_DISTANCE + 1):
             for z in range(chunk_z - VIEW_DISTANCE, chunk_z + VIEW_DISTANCE + 1):
                 if is_chunk_in_frustum(x, z, planes):
@@ -338,6 +461,9 @@ class World:
                     glTranslatef(x * CHUNK_SIZE, 0, z * CHUNK_SIZE)
                     chunk.render_water()
                     glPopMatrix()
+        glDisableClientState(GL_VERTEX_ARRAY)
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY)
+        glDisableClientState(GL_NORMAL_ARRAY)
         glDepthMask(GL_TRUE)
         glDisable(GL_BLEND)
 
@@ -350,6 +476,8 @@ class World:
             chunk = self.chunks.pop(key)
             glDeleteBuffers(1, [chunk.vbo_id])
             glDeleteBuffers(1, [chunk.water_vbo_id])
+            glDeleteBuffers(1, [chunk.leaves_vbo_id])
+            glDeleteBuffers(1, [chunk.sand_vbo_id])
 
 # --- Player ---
 class Player:
@@ -414,7 +542,7 @@ class Player:
         try:
             chunk = world.get_chunk(chunk_x, chunk_z)
             block_type = chunk.blocks.get((block_x, int(y), block_z))
-            return block_type is not None and block_type != "water"
+            return block_type is not None and block_type not in ["water", "leaves"]
         except KeyError:
             return False
 
@@ -430,7 +558,7 @@ def load_texture(filename):
                  GL_RGBA, GL_UNSIGNED_BYTE, texture_data)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-    if "water" in filename:
+    if "water" in filename or "leaves" in filename or "sand" in filename:
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
     return texture_id
@@ -502,6 +630,8 @@ def main():
 
     terrain_texture_id = load_texture("Rohan_Python_Sims/Images/terrainsmall.jpg")
     water_texture_id = load_texture("Rohan_Python_Sims/Images/water.jpg")
+    leaves_texture_id = load_texture("Rohan_Python_Sims/Images/leaves.jpg")
+    sand_texture_id = load_texture("Rohan_Python_Sims/Images/sand.jpg")  # Load sand texture
 
     glEnable(GL_DEPTH_TEST)
     glEnable(GL_TEXTURE_2D)
@@ -511,7 +641,6 @@ def main():
     player = Player(0, get_height(0, 0) + 2, 0)
     clock = pygame.time.Clock()
 
-    # Variables for adjustable FOV, main menu, and FPS counter
     fov = 80
     show_menu = False
     show_fps = False
@@ -542,7 +671,6 @@ def main():
         glClearColor(0.6, 0.8, 1.0, 1.0)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
-        # Use the adjustable FOV in the perspective projection.
         glMatrixMode(GL_PROJECTION)
         glLoadIdentity()
         gluPerspective(fov, (SCREEN_WIDTH / SCREEN_HEIGHT), 0.1, 500.0)
@@ -556,14 +684,13 @@ def main():
         light_pos = (player.x + 10, player.y + 20, player.z + 10, 0)
         glLightfv(GL_LIGHT0, GL_POSITION, light_pos)
 
+        # Render terrain
         glEnable(GL_POLYGON_OFFSET_FILL)
         glPolygonOffset(1.0, 1.0)
         glBindTexture(GL_TEXTURE_2D, terrain_texture_id)
-
         chunk_x = int(player.x // CHUNK_SIZE)
         chunk_z = int(player.z // CHUNK_SIZE)
         world.unload_far_chunks(chunk_x, chunk_z, VIEW_DISTANCE + 2)
-
         for x in range(chunk_x - VIEW_DISTANCE, chunk_x + VIEW_DISTANCE + 1):
             for z in range(chunk_z - VIEW_DISTANCE, chunk_z + VIEW_DISTANCE + 1):
                 chunk = world.get_chunk(x, z)
@@ -572,14 +699,38 @@ def main():
                     glTranslatef(x * CHUNK_SIZE, 0, z * CHUNK_SIZE)
                     chunk.render()
                     glPopMatrix()
-
         glDisable(GL_POLYGON_OFFSET_FILL)
 
+        # Render sand
+        glEnable(GL_POLYGON_OFFSET_FILL)
+        glPolygonOffset(0.5, 0.5)  # Slight offset to avoid z-fighting with terrain
+        glBindTexture(GL_TEXTURE_2D, sand_texture_id)
+        for x in range(chunk_x - VIEW_DISTANCE, chunk_x + VIEW_DISTANCE + 1):
+            for z in range(chunk_z - VIEW_DISTANCE, chunk_z + VIEW_DISTANCE + 1):
+                chunk = world.get_chunk(x, z)
+                if chunk:
+                    glPushMatrix()
+                    glTranslatef(x * CHUNK_SIZE, 0, z * CHUNK_SIZE)
+                    chunk.render_sand()
+                    glPopMatrix()
+        glDisable(GL_POLYGON_OFFSET_FILL)
+
+        # Render leaves
         glEnable(GL_POLYGON_OFFSET_FILL)
         glPolygonOffset(-1.0, -1.0)
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        glDepthMask(GL_FALSE)
+        glBindTexture(GL_TEXTURE_2D, leaves_texture_id)
+        for x in range(chunk_x - VIEW_DISTANCE, chunk_x + VIEW_DISTANCE + 1):
+            for z in range(chunk_z - VIEW_DISTANCE, chunk_z + VIEW_DISTANCE + 1):
+                chunk = world.get_chunk(x, z)
+                if chunk:
+                    glPushMatrix()
+                    glTranslatef(x * CHUNK_SIZE, 0, z * CHUNK_SIZE)
+                    chunk.render_leaves()
+                    glPopMatrix()
+
+        # Render water
         glBindTexture(GL_TEXTURE_2D, water_texture_id)
         for x in range(chunk_x - VIEW_DISTANCE, chunk_x + VIEW_DISTANCE + 1):
             for z in range(chunk_z - VIEW_DISTANCE, chunk_z + VIEW_DISTANCE + 1):
@@ -591,6 +742,7 @@ def main():
                     glPopMatrix()
         glDepthMask(GL_TRUE)
         glDisable(GL_BLEND)
+        glDisable(GL_POLYGON_OFFSET_FILL)
 
         if show_menu:
             draw_menu(fov)
