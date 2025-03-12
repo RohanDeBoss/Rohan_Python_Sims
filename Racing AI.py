@@ -4,26 +4,43 @@ import numpy as np
 import random
 import sys
 from collections import deque
+import math
 
 # Global Parameters
-NUM_CARS = 70
+NUM_CARS = 100
 MUTATION_RATE = 0.1
-MUTATION_STRENGTH = 0.5
+MUTATION_STRENGTH = 0.45
 CAR_SPEED = 5  # Initial speed in units per frame
 NUM_RAYS = 12  # Increased from 8 to 12 for better sensing
-VISION_CONE_ANGLE = math.pi * 1.25  # Increased from pi/2 to pi*1.25 (225 degrees)
+VISION_CONE_ANGLE = math.pi * 1.25  # 225 degrees
 MIN_SPEED = 3
 MAX_SPEED = 8
-GENERATION_DURATION = 15 * 1000  # Increased from 10 to 15 seconds
+GENERATION_DURATION = 15 * 1000  # 15 seconds
 CAR_WIDTH = 20
 CAR_HEIGHT = 10
+
+# Simulation dimensions
 SIM_WIDTH = 850
 SIM_HEIGHT = 600
-NN_PANEL_WIDTH = 300
-NN_PANEL_HEIGHT = 300
-WIDTH = SIM_WIDTH + NN_PANEL_WIDTH
 HEIGHT = SIM_HEIGHT
-NN_PANEL_RECT = (SIM_WIDTH, (HEIGHT - NN_PANEL_HEIGHT) // 2, NN_PANEL_WIDTH, NN_PANEL_HEIGHT)
+
+UI_WIDTH = 320                # Give a bit more width on the right side
+WIDTH = SIM_WIDTH + UI_WIDTH  # Overall window width
+
+# NN Panel
+NN_PANEL_WIDTH = 280
+NN_PANEL_HEIGHT = 300
+NN_PANEL_X = SIM_WIDTH + (UI_WIDTH - NN_PANEL_WIDTH) // 2
+NN_PANEL_Y = 50
+NN_PANEL_RECT = (NN_PANEL_X, NN_PANEL_Y, NN_PANEL_WIDTH, NN_PANEL_HEIGHT)
+
+# Graph
+GRAPH_WIDTH = 310
+GRAPH_HEIGHT = 215
+GRAPH_X = SIM_WIDTH - 15 + (UI_WIDTH - GRAPH_WIDTH) // 2
+GRAPH_Y = NN_PANEL_Y + NN_PANEL_HEIGHT + 20
+GRAPH_RECT = (GRAPH_X, GRAPH_Y, GRAPH_WIDTH, GRAPH_HEIGHT)
+
 
 # Enhanced Physics Parameters
 WHEELBASE = 5
@@ -479,6 +496,126 @@ def draw_track():
     for cp in checkpoints:
         pygame.draw.line(screen, GREEN, cp[0], cp[1], 1)
 
+def draw_performance_graph(rect, stats):
+    x, y, w, h = rect
+    
+    # Draw background and border
+    pygame.draw.rect(screen, WHITE, rect)
+    pygame.draw.rect(screen, BLACK, rect, 1)
+    
+    # Title
+    title = FONT_SMALL.render("Performance History", True, BLACK)
+    screen.blit(title, (x + (w - title.get_width()) // 2, y + 5))
+    
+    if len(stats) < 2:
+        msg = FONT_SMALL.render("Collecting data...", True, (100, 100, 100))
+        screen.blit(msg, (x + (w - msg.get_width()) // 2, y + h // 2))
+        return
+    
+    # Extract data with validation
+    generations = [s['generation'] for s in stats]
+    best_fitness = []
+    avg_fitness = []
+    for s in stats:
+        bf = s['best_fitness']
+        best_fitness.append(bf if math.isfinite(bf) else y_min)  # Fixed here
+        af = s['avg_fitness']
+        avg_fitness.append(af if math.isfinite(af) else y_min)    # Fixed here
+    
+    # Calculate y-axis bounds with safety checks
+    valid_best = [f for f in best_fitness if math.isfinite(f)]
+    valid_avg = [f for f in avg_fitness if math.isfinite(f)]
+    if valid_best and valid_avg:
+        max_best = max(valid_best)
+        max_avg = max(valid_avg)
+        y_max = max(max_best, max_avg) * 1.1
+    else:
+        y_max = 1.0  # Default value if all are invalid
+    
+    y_min = 0.0  # Explicitly define y_min
+    if y_max <= y_min:
+        y_max = y_min + 1.0
+    
+    graph_x = x + 40
+    graph_y = y + 25
+    graph_w = w - 50
+    graph_h = h - 60
+    
+    # Draw axes
+    pygame.draw.line(screen, BLACK, (graph_x, graph_y), (graph_x, graph_y + graph_h), 1)
+    pygame.draw.line(screen, BLACK, (graph_x, graph_y + graph_h), (graph_x + graph_w, graph_y + graph_h), 1)
+
+    # Y-axis labels
+    for i in range(5):
+        fraction = i / 4.0
+        value = y_min + fraction * (y_max - y_min)
+        y_pos = graph_y + graph_h - int(fraction * graph_h)
+        
+        label = FONT_SMALL.render(f"{value:.0f}", True, BLACK)
+        screen.blit(label, (graph_x - label.get_width() - 5, y_pos - label.get_height() // 2))
+
+    # X-axis labels
+    total_gens = len(generations)
+    max_gen = generations[-1] if generations else 0
+    for i in range(min(total_gens, 5)):
+        idx = i * (total_gens - 1) // 4 if total_gens > 1 else 0
+        gen_label = generations[idx]
+        denominator = max_gen - generations[0] if generations else 1
+        denominator = denominator if denominator != 0 else 1
+        fraction = (gen_label - generations[0]) / denominator
+        x_pos = graph_x + int(fraction * graph_w)
+        
+        label = FONT_SMALL.render(f"{gen_label}", True, BLACK)
+        screen.blit(label, (x_pos - label.get_width() // 2, graph_y + graph_h + 5))
+
+    def fitness_to_y(f):
+        if y_max - y_min < 1e-9 or not math.isfinite(f):
+            return graph_y + graph_h // 2
+        normalized = (f - y_min) / (y_max - y_min)
+        return graph_y + graph_h - int(normalized * graph_h)
+
+    # Plot best fitness
+    best_points = []
+    for i, gen in enumerate(generations):
+        denominator = max_gen - generations[0] if generations else 1
+        denominator = denominator if denominator != 0 else 1
+        px = graph_x + int((gen - generations[0]) / denominator * graph_w)
+        py = fitness_to_y(best_fitness[i])
+        best_points.append((px, py))
+    if len(best_points) > 1:
+        pygame.draw.lines(screen, (0, 0, 255), False, best_points, 2)
+
+    # Plot average fitness
+    avg_points = []
+    for i, gen in enumerate(generations):
+        denominator = max_gen - generations[0] if generations else 1
+        denominator = denominator if denominator != 0 else 1
+        px = graph_x + int((gen - generations[0]) / denominator * graph_w)
+        py = fitness_to_y(avg_fitness[i])
+        avg_points.append((px, py))
+    if len(avg_points) > 1:
+        pygame.draw.lines(screen, (0, 200, 0), False, avg_points, 2)
+
+    # Legend (moved further left)
+    legend_x = graph_x - 140  # Shifted left by 60px from graph's left edge
+    legend_y = graph_y + 150
+    line_length = 20
+
+    # Best fitness legend
+    pygame.draw.line(screen, (0, 0, 255), 
+                    (legend_x, legend_y), 
+                    (legend_x + line_length, legend_y), 2)
+    best_label = FONT_SMALL.render("Best", True, (0, 0, 255))
+    screen.blit(best_label, (legend_x + line_length + 8, legend_y - 8))  # 8px padding
+
+    # Average fitness legend
+    legend_y += 25  # Vertical spacing between entries
+    pygame.draw.line(screen, (0, 200, 0), 
+                    (legend_x, legend_y), 
+                    (legend_x + line_length, legend_y), 2)
+    avg_label = FONT_SMALL.render("Average", True, (0, 200, 0))
+    screen.blit(avg_label, (legend_x + line_length + 8, legend_y - 8))
+    
 def draw_neural_network(panel_rect, nn, inputs):
     if not hasattr(nn, 'h') or not hasattr(nn, 'probs'):
         # If forward hasn't been called yet, run a forward pass
@@ -488,9 +625,11 @@ def draw_neural_network(panel_rect, nn, inputs):
     probs = nn.probs
     
     panel_x, panel_y, panel_w, panel_h = panel_rect
-    input_x = panel_x + 50
+    
+    # Adjust node positions for the smaller panel
+    input_x = panel_x + 40
     hidden_x = panel_x + panel_w // 2
-    output_x = panel_x + panel_w - 50
+    output_x = panel_x + panel_w - 40
     
     n_input = nn.input_size
     n_hidden = nn.hidden_size
@@ -504,63 +643,65 @@ def draw_neural_network(panel_rect, nn, inputs):
     hidden_neurons = [(hidden_x, panel_y + (i + 1) * spacing_hidden) for i in range(n_hidden)]
     output_neurons = [(output_x, panel_y + (i + 1) * spacing_output) for i in range(n_output)]
     
-    # Draw weights connecting input to hidden layer
+    # Draw panel background
+    pygame.draw.rect(screen, WHITE, panel_rect)
+    pygame.draw.rect(screen, BLACK, panel_rect, 1)
+    
+    # Draw title
+    title = FONT_SMALL.render("Neural Network", True, BLACK)
+    screen.blit(title, (panel_x + (panel_w - title.get_width()) // 2, panel_y - 20))
+    
+    # Draw connections (simplified to reduce visual clutter)
     for i, inp_pos in enumerate(input_neurons):
         for j, hid_pos in enumerate(hidden_neurons):
             weight = nn.w1[i, j]
-            color = BLUE if weight > 0 else RED
-            width = max(1, int(abs(weight) * 2))
-            # Only draw strong connections to reduce visual clutter
-            if abs(weight) > 0.3:
+            if abs(weight) > 0.4:  # Only show stronger connections
+                color = BLUE if weight > 0 else RED
+                width = max(1, int(abs(weight) * 2))
                 pygame.draw.line(screen, color, inp_pos, hid_pos, width)
     
-    # Draw weights connecting hidden to output layer
     for i, hid_pos in enumerate(hidden_neurons):
         for j, out_pos in enumerate(output_neurons):
             weight = nn.w2[i, j]
-            color = BLUE if weight > 0 else RED
-            width = max(1, int(abs(weight) * 2))
-            # Only draw strong connections
-            if abs(weight) > 0.3:
+            if abs(weight) > 0.4:  # Only show stronger connections
+                color = BLUE if weight > 0 else RED
+                width = max(1, int(abs(weight) * 2))
                 pygame.draw.line(screen, color, hid_pos, out_pos, width)
+    
+    # Draw nodes with smaller size
+    node_size = 4
     
     # Draw input neurons
     for i, pos in enumerate(input_neurons):
         if i < NUM_RAYS:
-            # Color based on ray distance
             activation = inputs[i]
             color_val = int(activation * 255)
-            pygame.draw.circle(screen, (color_val, color_val, 0), pos, 6)
+            pygame.draw.circle(screen, (color_val, color_val, 0), pos, node_size)
         else:
-            # Different color for metadata inputs
             activation = inputs[i]
             color_val = int(abs(activation) * 255)
-            pygame.draw.circle(screen, (0, color_val, color_val), pos, 6)
-        
-        pygame.draw.circle(screen, BLACK, pos, 6, 1)
+            pygame.draw.circle(screen, (0, color_val, color_val), pos, node_size)
+        pygame.draw.circle(screen, BLACK, pos, node_size, 1)
     
     # Draw hidden neurons
     for i, pos in enumerate(hidden_neurons):
         activation = h[i]
         color_val = int(min(activation, 1) * 255)
-        pygame.draw.circle(screen, (0, color_val, 0), pos, 6)
-        pygame.draw.circle(screen, BLACK, pos, 6, 1)
+        pygame.draw.circle(screen, (0, color_val, 0), pos, node_size)
+        pygame.draw.circle(screen, BLACK, pos, node_size, 1)
     
-    # Draw output neurons with labels
-    output_labels = ["Left", "Straight", "Right", "Slow", "Maintain", "Fast"]
+    # Draw output neurons with smaller labels
+    output_labels = ["L", "S", "R", "↓", "=", "↑"]  # Shortened labels
     for i, pos in enumerate(output_neurons):
         activation = probs[i]
         color_val = int(activation * 255)
-        pygame.draw.circle(screen, (0, 0, color_val), pos, 8)
-        pygame.draw.circle(screen, BLACK, pos, 8, 1)
+        pygame.draw.circle(screen, (0, 0, color_val), pos, node_size + 2)
+        pygame.draw.circle(screen, BLACK, pos, node_size + 2, 1)
         
         # Add output labels
         label = output_labels[i]
         text = FONT_SMALL.render(label, True, BLACK)
-        if i < 3:  # Steering actions
-            screen.blit(text, (pos[0] + 10, pos[1] - 8))
-        else:      # Speed actions
-            screen.blit(text, (pos[0] + 10, pos[1] - 8))
+        screen.blit(text, (pos[0] + 8, pos[1] - 8))
 
 def draw_car(car):
     color = RED
@@ -711,7 +852,11 @@ def run_simulation():
                 [normalized_speed, normalized_steering, checkpoint_progress, checkpoint_angle]
             ])
             
+            # Draw neural network visualization
             draw_neural_network(NN_PANEL_RECT, best_car.nn, inputs)
+            
+            # Draw performance graph
+            draw_performance_graph(GRAPH_RECT, generation_stats)
         
         # Display stats
         stats = [
@@ -740,7 +885,8 @@ def run_simulation():
         generation_elapsed = current_time - generation_start_time
         
         if generation_elapsed > GENERATION_DURATION or alive_count == 0:
-            # Record stats for this generation
+            # Calculate best_fitness_current as the max of ALL cars (alive or dead)
+            best_fitness_current = max(car.fitness for car in cars)
             avg_fitness = sum(car.fitness for car in cars) / NUM_CARS
             generation_stats.append({
                 'generation': generation,
