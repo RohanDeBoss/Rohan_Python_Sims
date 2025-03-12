@@ -7,15 +7,21 @@ from collections import deque
 import math
 
 # Global Parameters
-NUM_CARS = 100
+NUM_CARS = 200
 MUTATION_RATE = 0.1
 MUTATION_STRENGTH = 0.45
-CAR_SPEED = 5  # Initial speed in units per frame
-NUM_RAYS = 12  # Increased from 8 to 12 for better sensing
-VISION_CONE_ANGLE = math.pi * 1.25  # 225 degrees
-MIN_SPEED = 3
-MAX_SPEED = 8
-GENERATION_DURATION = 15 * 1000  # 15 seconds
+
+NUM_RAYS = 8  # Reduced from 12 to 8 rays
+VISION_CONE_ANGLE = math.pi * 0.8  # Narrower: 144 degrees instead of 225
+
+CONSTANT_SPEED = 300  # Set a single constant speed
+FRICTION = 0.0  # No need for friction when speed is constant
+
+GENERATION_DURATION = 15 #Seconds
+
+# With a frame-based duration
+GENERATION_FRAMES = GENERATION_DURATION * 60  # 15 seconds at 60 fps
+
 CAR_WIDTH = 20
 CAR_HEIGHT = 10
 
@@ -44,7 +50,7 @@ GRAPH_RECT = (GRAPH_X, GRAPH_Y, GRAPH_WIDTH, GRAPH_HEIGHT)
 
 # Enhanced Physics Parameters
 WHEELBASE = 5
-MAX_STEERING_ANGLE = 0.2
+MAX_STEERING_ANGLE = 0.22
 ACCELERATION = 0.05
 FRICTION = 0.02  # New parameter for simulating friction
 CRASH_PENALTY = 10  # New parameter for penalizing crashes
@@ -218,13 +224,13 @@ def menu():
 # Enhanced Neural Network Class
 class NeuralNetwork:
     def __init__(self):
-        # Input size: ray distances + speed + current steering angle + progress + relative checkpoint angle
-        # [NUM_RAYS + 4] inputs in total
-        self.input_size = NUM_RAYS + 4
-        self.hidden_size = 24  # Increased from 16 to 24
-        self.output_size = 6  # Still 6 outputs (3 steering, 3 acceleration)
+        # Reduce inputs: fewer rays (7) + steering + progress + checkpoint angle
+        self.input_size = 8 + 3
+        # Smaller hidden layer: approximately mean of input and output size
+        self.hidden_size = 14
+        self.output_size = 3  # Keep the same (left, straight, right)
         
-        # Initialize weights with He initialization for better training
+        # Initialize weights with He initialization
         self.w1 = np.random.randn(self.input_size, self.hidden_size) * np.sqrt(2.0 / self.input_size)
         self.b1 = np.zeros(self.hidden_size)
         self.w2 = np.random.randn(self.hidden_size, self.output_size) * np.sqrt(2.0 / self.hidden_size)
@@ -276,9 +282,9 @@ class Car:
         self.nn = nn
         self.x, self.y = start_pos
         self.angle = start_angle
-        self.speed = CAR_SPEED
+        self.speed = CONSTANT_SPEED  # Use constant speed
         self.steering_angle = 0
-        self.acceleration = 0
+        # Remove acceleration
         self.alive = True
         self.fitness = 0
         self.raw_fitness = 0  # Tracks fitness without penalties
@@ -290,7 +296,7 @@ class Car:
         self.prev_x = self.x
         self.prev_y = self.y
         self.idle_time = 0  # Track how long car has been inactive
-        self.avg_speed = deque(maxlen=60)  # Track average speed
+        self.avg_speed = deque(maxlen=60)  # Keep for position tracking
         self.wrong_way = False  # Flag for going the wrong way
         self.position_history = deque(maxlen=60)  # Track position history
         self.crashes = 0  # Count number of crashes
@@ -341,11 +347,11 @@ class Car:
         return np.array(distances)
 
     def decide_actions(self):
-        # Create enhanced input vector
+        # Create simplified input vector
         inputs = self.cast_rays()
         
-        # Add additional inputs: speed, current steering angle, progress, and angle to next checkpoint
-        normalized_speed = (self.speed - MIN_SPEED) / (MAX_SPEED - MIN_SPEED)  # Normalize to [0,1]
+        # Add additional inputs: current steering angle, progress, and angle to next checkpoint
+        # Removed normalized_speed
         normalized_steering = self.steering_angle / MAX_STEERING_ANGLE  # Normalize to [-1,1]
         checkpoint_progress = self.current_checkpoint / len(checkpoints)  # Progress through track
         checkpoint_angle = self.calculate_angle_to_next_checkpoint()
@@ -353,18 +359,15 @@ class Car:
         # Combine all inputs
         input_vector = np.concatenate([
             inputs, 
-            [normalized_speed, 
-             normalized_steering, 
-             checkpoint_progress, 
-             checkpoint_angle]
+            [normalized_steering, 
+            checkpoint_progress, 
+            checkpoint_angle]
         ])
         
-        # Get NN outputs
+        # Get NN outputs - only steering outputs
         outputs = self.nn.forward(input_vector)
-        steering_outputs = outputs[:3]  # Left, Straight, Right
-        accel_outputs = outputs[3:]     # Decelerate, Maintain, Accelerate
+        steering_outputs = outputs  # Left, Straight, Right
         steering_action = np.argmax(steering_outputs)
-        accel_action = np.argmax(accel_outputs)
 
         # Set steering angle based on neural network output
         if steering_action == 0:    # Left
@@ -374,42 +377,35 @@ class Car:
         elif steering_action == 2:  # Right
             self.steering_angle = MAX_STEERING_ANGLE
 
-        # Set acceleration based on neural network output
-        if accel_action == 0:       # Decelerate
-            self.acceleration = -ACCELERATION
-        elif accel_action == 1:     # Maintain
-            self.acceleration = 0
-        elif accel_action == 2:     # Accelerate
-            self.acceleration = ACCELERATION
-
-    def update(self):
+    def update(self, delta_time):  # Add delta_time parameter
         if self.alive:
             # Save previous position
             self.prev_x = self.x
             self.prev_y = self.y
             
-            # Update speed with acceleration and friction
-            self.speed += self.acceleration
-            self.speed -= FRICTION * self.speed  # Apply friction based on current speed
-            self.speed = max(MIN_SPEED, min(MAX_SPEED, self.speed))
+            # Speed is now constant
+            self.speed = CONSTANT_SPEED
             
-            # Add current speed to rolling average
+            # Add current position to rolling history
             self.avg_speed.append(self.speed)
 
-            # Update angle using bicycle model
-            dtheta = (self.speed / WHEELBASE) * math.tan(self.steering_angle)
+            # Update angle using bicycle model (scaled by delta_time)
+            dtheta = (self.speed / WHEELBASE) * math.tan(self.steering_angle) * delta_time
             self.angle += dtheta
             self.angle %= (2 * math.pi)
 
-            # Update position
-            self.x += self.speed * math.cos(self.angle)
-            self.y += self.speed * math.sin(self.angle)
-            
-            # Track position history for detection of stalling
+            # Update position (movement scaled by delta_time)
+            self.x += self.speed * math.cos(self.angle) * delta_time
+            self.y += self.speed * math.sin(self.angle) * delta_time
+
+            # Track position history for stalling detection
             self.position_history.append((self.x, self.y))
             
-            # Calculate distance traveled
-            self.distance_traveled += math.hypot(self.x - self.prev_x, self.y - self.prev_y)
+            # Calculate distance traveled (automatically delta_time-aware)
+            self.distance_traveled += math.hypot(
+                self.x - self.prev_x,
+                self.y - self.prev_y
+            )
 
             # Check for collisions and checkpoints
             if self.check_collision():
@@ -454,12 +450,7 @@ class Car:
                         self.fitness -= 20  # Penalty for stalling
                 else:
                     self.idle_time = 0
-            
-            # Add small continuous reward for speed (encourages going fast)
-            self.fitness += 0.001 * self.speed
-            
-            # Add small continuous reward for staying in the middle of the track
-            # (This would require calculating distance to track edges, omitted for brevity)
+                
 
     def check_collision(self):
         car_path = [(self.prev_x, self.prev_y), (self.x, self.y)]
@@ -691,7 +682,7 @@ def draw_neural_network(panel_rect, nn, inputs):
         pygame.draw.circle(screen, BLACK, pos, node_size, 1)
     
     # Draw output neurons with smaller labels
-    output_labels = ["L", "S", "R", "↓", "=", "↑"]  # Shortened labels
+    output_labels = ["L", "S", "R"]  # Only steering labels
     for i, pos in enumerate(output_neurons):
         activation = probs[i]
         color_val = int(activation * 255)
@@ -762,6 +753,7 @@ def elitism(cars, count=5):
 # Main Simulation Loop
 def run_simulation():
     global walls, checkpoints, road_polygons, start_pos, start_angle
+    generation_frame_count = 0
 
     # Select track from menu
     track_type = menu()
@@ -776,6 +768,7 @@ def run_simulation():
     # Generation timer
     generation_start_time = pygame.time.get_ticks()
     
+    
     # Statistics tracking
     generation_stats = []
     
@@ -785,6 +778,10 @@ def run_simulation():
     
     # Main game loop
     while running:
+        # Calculate delta_time at the start of the loop
+        delta_time = clock.tick(60) / 1000.0  # Convert milliseconds to seconds
+        generation_frame_count += 1
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -816,8 +813,7 @@ def run_simulation():
             if car.alive:
                 # Get actions from neural network
                 car.decide_actions()
-                # Update car state
-                car.update()
+                car.update(delta_time)  # Pass delta_time here
                 alive_count += 1
                 
                 # Track best car in current generation
@@ -842,16 +838,15 @@ def run_simulation():
         if best_car:
             # Prepare inputs for visualization
             ray_distances = best_car.cast_rays()
-            normalized_speed = (best_car.speed - MIN_SPEED) / (MAX_SPEED - MIN_SPEED)
+            # Remove normalized_speed
             normalized_steering = best_car.steering_angle / MAX_STEERING_ANGLE
             checkpoint_progress = best_car.current_checkpoint / len(checkpoints)
             checkpoint_angle = best_car.calculate_angle_to_next_checkpoint()
-            
+
             inputs = np.concatenate([
                 ray_distances, 
-                [normalized_speed, normalized_steering, checkpoint_progress, checkpoint_angle]
-            ])
-            
+                [normalized_steering, checkpoint_progress, checkpoint_angle]
+            ])          
             # Draw neural network visualization
             draw_neural_network(NN_PANEL_RECT, best_car.nn, inputs)
             
@@ -864,7 +859,7 @@ def run_simulation():
             f"Cars Alive: {alive_count}/{NUM_CARS}",
             f"Best Fitness: {best_fitness:.2f}",
             f"Current Best: {best_fitness_current:.2f}",
-            f"Time: {(pygame.time.get_ticks() - generation_start_time) / 1000:.1f}s"
+            f"Time: {generation_frame_count/60:.2f}s/{GENERATION_FRAMES/60:.2f}s ({(generation_frame_count/GENERATION_FRAMES)*100:.0f}%)"
         ]
         
         if best_car:
@@ -884,7 +879,7 @@ def run_simulation():
         current_time = pygame.time.get_ticks()
         generation_elapsed = current_time - generation_start_time
         
-        if generation_elapsed > GENERATION_DURATION or alive_count == 0:
+        if generation_frame_count >= GENERATION_FRAMES or alive_count == 0:
             # Calculate best_fitness_current as the max of ALL cars (alive or dead)
             best_fitness_current = max(car.fitness for car in cars)
             avg_fitness = sum(car.fitness for car in cars) / NUM_CARS
@@ -930,7 +925,7 @@ def run_simulation():
             generation += 1
             
             # Reset generation timer
-            generation_start_time = pygame.time.get_ticks()
+            generation_frame_count = 0
             
             # Display generation change message
             gen_msg = f"Generation {generation} started!"
@@ -940,7 +935,7 @@ def run_simulation():
             pygame.time.delay(1000)  # Pause briefly to show generation change
         
         pygame.display.flip()
-        clock.tick(60)
+        delta_time = clock.tick(60) / 1000.0  # Convert milliseconds to seconds
 
     pygame.quit()
 
