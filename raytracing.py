@@ -2,34 +2,31 @@ import numpy as np
 import time
 import concurrent.futures
 import multiprocessing
-import functools
+import pygame
+
+camera_movement_enabled = False  # New global variable
 
 # Global Variables
-NUM_CPU_CORES = multiprocessing.cpu_count() - 1  # Leave one core for main thread
-MAX_BOUNCES = 3  # Number of ray bounces
-focal_length = 800.0  # Camera focal length
-
-# Resolution & Camera Settings
+NUM_CPU_CORES = multiprocessing.cpu_count() - 1
+MAX_BOUNCES = 3
+focal_length = 800.0
 WINDOW_HEIGHT = 600
-WINDOW_WIDTH = int(WINDOW_HEIGHT * 1.5)  # 900
-RENDER_HEIGHT = 150  # Reduced for performance
-RENDER_WIDTH = int(RENDER_HEIGHT * 1.5)  # 225
-
-cam_pos = np.array([150, 97, -800], dtype=np.float32)  # Starting position
-cam_yaw = 0.0  # Horizontal rotation
-cam_pitch = 0.0  # Vertical rotation
-move_speed = 200.0  # Movement speed
-turn_speed = 0.001  # Reduced for smoother mouse control
-
-# Add variables for temporal accumulation
+WINDOW_WIDTH = int(WINDOW_HEIGHT * 1.5)
+RENDER_HEIGHT = 150
+RENDER_WIDTH = int(RENDER_HEIGHT * 1.5)
+cam_pos = np.array([150, 97, -800], dtype=np.float32)
+cam_yaw = 0.0
+cam_pitch = 0.0
+move_speed = 200.0
+turn_speed = 0.001
 accumulated_image = None
 accumulation_count = 0
-max_accumulation = 30  # Maximum number of frames to accumulate
-movement_threshold = 0.001  # Smaller threshold to detect camera movement
-frames_still_count = 0    # Counter for frames where camera has been still
-required_still_frames = 2  # Number of frames camera must be still before accumulation starts
+max_accumulation = 1000
+movement_threshold = 0.001
+frames_still_count = 0
+required_still_frames = 2
 
-# Utility Functions - Removed numba since it might not be installed
+# Utility Functions
 def normalize(v):
     norm = np.sqrt(np.sum(v * v))
     return v / norm if norm > 0 else v
@@ -90,23 +87,16 @@ spheres = [
     Sphere([75, 30, 170], 30, Material([0.5, 0.5, 0.5], reflectivity=0.1)),
     Sphere([225, 30, 170], 30, Material([0.7, 0.3, 0.3], reflectivity=0.1)),
 ]
-
-planes = [
-    Plane(point=[0, 160, 0], normal=[0, -1, 0], material=Material([0.8, 0.8, 0.8], reflectivity=0.0))
-]
-
+planes = [Plane(point=[0, 160, 0], normal=[0, -1, 0], material=Material([0.8, 0.8, 0.8], reflectivity=0.0))]
 light_pos = np.array([150, 40, -150], dtype=np.float32)
 
-# Optimized Ray Tracing Function
+# Ray Tracing Functions
 def trace_ray(ray_origin, ray_dir, depth=MAX_BOUNCES):
     if depth <= 0:
         return np.zeros(3)
-    
     closest_t = np.inf
     hit_object = None
     hit_type = None
-    
-    # More efficient sphere intersection test
     for sphere in spheres:
         oc = ray_origin - sphere.center
         a = np.dot(ray_dir, ray_dir)
@@ -119,7 +109,6 @@ def trace_ray(ray_origin, ray_dir, depth=MAX_BOUNCES):
                 closest_t = t
                 hit_object = sphere
                 hit_type = 'sphere'
-    
     for plane in planes:
         denom = np.dot(ray_dir, plane.normal)
         if abs(denom) > 1e-6:
@@ -128,13 +117,10 @@ def trace_ray(ray_origin, ray_dir, depth=MAX_BOUNCES):
                 closest_t = t
                 hit_object = plane
                 hit_type = 'plane'
-    
     if hit_object is None:
         t = 0.5 * (ray_dir[1] + 1.0)
         return (1.0 - t) * np.array([1.0, 1.0, 1.0]) + t * np.array([0.5, 0.7, 1.0])
-    
     hit_point = ray_origin + ray_dir * closest_t
-    
     if hit_type == 'sphere':
         normal = normalize(hit_point - hit_object.center)
         material = hit_object.material
@@ -154,7 +140,6 @@ def trace_ray(ray_origin, ray_dir, depth=MAX_BOUNCES):
             return material.color * diffuse
     else:
         normal = hit_object.normal
-        # Optimized checkerboard calculation
         scale = 20.0
         if (int(np.floor(hit_point[0] / scale)) + int(np.floor(hit_point[2] / scale))) % 2 == 0:
             floor_color = np.array([1.0, 1.0, 1.0])
@@ -164,78 +149,55 @@ def trace_ray(ray_origin, ray_dir, depth=MAX_BOUNCES):
         diffuse = max(np.dot(normal, light_dir), 0.0)
         return floor_color * diffuse
 
-# Optimized batch processing function
 def batch_trace_rays(rays_batch):
     return [trace_ray(cam_pos, ray_dir) for ray_dir in rays_batch]
 
-# Improved rendering function with better parallelization
 def render_full(cam_pos, cam_yaw, cam_pitch, add_jitter=False):
     forward, right, up = get_camera_vectors(cam_yaw, cam_pitch)
     screen_center = cam_pos + focal_length * forward
     screen_width = 300.0
     screen_height = 200.0
-
     ys, xs = np.indices((RENDER_HEIGHT, RENDER_WIDTH), dtype=np.float32)
     u = (xs + 0.5) / RENDER_WIDTH
     v = (ys + 0.5) / RENDER_HEIGHT
-    
-    # Add small random jitter for anti-aliasing when accumulating frames
     if add_jitter:
         u += (np.random.random((RENDER_HEIGHT, RENDER_WIDTH)) - 0.5) / RENDER_WIDTH
         v += (np.random.random((RENDER_HEIGHT, RENDER_WIDTH)) - 0.5) / RENDER_HEIGHT
-        
     offset_x = (u - 0.5) * screen_width
     offset_y = (v - 0.5) * screen_height
     sample_pos = screen_center + offset_x[:, :, np.newaxis] * right + offset_y[:, :, np.newaxis] * up
-
     ray_dirs = sample_pos - cam_pos
     norms = np.linalg.norm(ray_dirs, axis=-1, keepdims=True)
     ray_dirs = ray_dirs / norms
-
     flat_dirs = ray_dirs.reshape(-1, 3)
-    
-    # Optimize batch size for better performance
     batch_size = max(len(flat_dirs) // (NUM_CPU_CORES * 2), 10)
     batches = [flat_dirs[i:i+batch_size] for i in range(0, len(flat_dirs), batch_size)]
-    
     with concurrent.futures.ProcessPoolExecutor(max_workers=NUM_CPU_CORES) as executor:
         results = list(executor.map(batch_trace_rays, batches))
-    
-    # Flatten results
     flat_result = [item for sublist in results for item in sublist]
     result = np.array(flat_result, dtype=np.float32).reshape(RENDER_HEIGHT, RENDER_WIDTH, 3) * 255
     return result
 
-# Main Loop (Pygame imports moved here)
+# Main Loop
 if __name__ == '__main__':
-    import pygame  # Import Pygame only in the main process
     pygame.init()
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
     pygame.display.set_caption("First-Person Ray Tracing Game")
     clock = pygame.time.Clock()
     font = pygame.font.SysFont(None, 24)
-
     pygame.mouse.set_visible(False)
     pygame.event.set_grab(True)
-
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     iteration_future = executor.submit(render_full, cam_pos.copy(), cam_yaw, cam_pitch)
-
-    # Store previous camera state to detect movement
     prev_cam_pos = cam_pos.copy()
     prev_cam_yaw = cam_yaw
     prev_cam_pitch = cam_pitch
-
     last_time = time.time()
     frame_count = 0
     fps_start_time = time.time()
     running = True
-    
-    # For UI display
     accumulation_active = False
     accumulation_waiting = False
-    
-    # Display a loading message
     loading_font = pygame.font.SysFont(None, 36)
     loading_text = loading_font.render("Initializing Ray Tracer...", True, (255, 255, 255))
     screen.blit(loading_text, (WINDOW_WIDTH//2 - loading_text.get_width()//2, 
@@ -247,94 +209,71 @@ if __name__ == '__main__':
         delta_time = current_time - last_time
         last_time = current_time
 
+        # Event handling
         for event in pygame.event.get():
-            if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_q):
+            if event.type == pygame.QUIT:
                 running = False
-
-        # Camera Rotation
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_q or event.key == pygame.K_ESCAPE:
+                    running = False
+                elif event.key == pygame.K_SPACE:
+                    camera_movement_enabled = not camera_movement_enabled
+                    
+        # Camera Rotation and Movement
         mouse_dx, mouse_dy = pygame.mouse.get_rel()
-        cam_yaw += mouse_dx * turn_speed
-        cam_pitch += mouse_dy * turn_speed
-        cam_pitch = np.clip(cam_pitch, -1.5, 1.5)
-
-        # Camera Movement
-        keys = pygame.key.get_pressed()
-        forward, right, _ = get_camera_vectors(cam_yaw, cam_pitch)
-        moved = False
-        
-        if keys[pygame.K_w]:
-            cam_pos += move_speed * delta_time * forward
-            moved = True
-        if keys[pygame.K_s]:
-            cam_pos -= move_speed * delta_time * forward
-            moved = True
-        if keys[pygame.K_a]:
-            cam_pos -= move_speed * delta_time * right
-            moved = True
-        if keys[pygame.K_d]:
-            cam_pos += move_speed * delta_time * right
-            moved = True
+        if camera_movement_enabled:
+            cam_yaw += mouse_dx * turn_speed
+            cam_pitch += mouse_dy * turn_speed
+            cam_pitch = np.clip(cam_pitch, -1.5, 1.5)
+            keys = pygame.key.get_pressed()
+            forward, right, _ = get_camera_vectors(cam_yaw, cam_pitch)
+            if keys[pygame.K_w]:
+                cam_pos += move_speed * delta_time * forward
+            if keys[pygame.K_s]:
+                cam_pos -= move_speed * delta_time * forward
+            if keys[pygame.K_a]:
+                cam_pos -= move_speed * delta_time * right
+            if keys[pygame.K_d]:
+                cam_pos += move_speed * delta_time * right
 
         # Check if camera has moved significantly
         pos_diff = np.linalg.norm(cam_pos - prev_cam_pos)
         rot_diff = abs(cam_yaw - prev_cam_yaw) + abs(cam_pitch - prev_cam_pitch)
-        camera_moved = (pos_diff > movement_threshold or 
-                        rot_diff > movement_threshold or 
-                        moved or 
-                        abs(mouse_dx) > 0 or 
-                        abs(mouse_dy) > 0)
+        camera_moved = (pos_diff > movement_threshold or rot_diff > movement_threshold)
 
         # Display and Render
         if iteration_future.done():
             new_image = iteration_future.result()
-            
-            # Accumulation logic with waiting period
             if camera_moved:
-                # Reset accumulation and waiting counter if camera moved
                 accumulated_image = new_image.copy()
                 accumulation_count = 1
                 frames_still_count = 0
                 accumulation_active = False
                 accumulation_waiting = False
-                
-                # Start a new render with the updated camera position
                 iteration_future = executor.submit(render_full, cam_pos.copy(), cam_yaw, cam_pitch, False)
             else:
-                # Camera is still - increment the counter
                 frames_still_count += 1
-                
                 if frames_still_count < required_still_frames:
-                    # Still in waiting period
                     accumulated_image = new_image.copy()
                     accumulation_count = 1
                     accumulation_active = False
                     accumulation_waiting = True
-                    
-                    # Continue rendering without accumulation during wait period
                     iteration_future = executor.submit(render_full, cam_pos.copy(), cam_yaw, cam_pitch, False)
                 else:
-                    # Passed waiting period - start/continue accumulation
                     if accumulated_image is None:
                         accumulated_image = new_image.copy()
                         accumulation_count = 1
                     else:
-                        # Weighted average to favor newer frames slightly
                         weight = min(1.0 / accumulation_count, 0.5)
                         accumulated_image = accumulated_image * (1 - weight) + new_image * weight
                         accumulation_count = min(accumulation_count + 1, max_accumulation)
-                    
                     accumulation_active = True
                     accumulation_waiting = False
-                    
-                    # Continue rendering with jitter for better anti-aliasing
                     iteration_future = executor.submit(render_full, cam_pos.copy(), cam_yaw, cam_pitch, True)
             
-            # Update previous camera state
             prev_cam_pos = cam_pos.copy()
             prev_cam_yaw = cam_yaw
             prev_cam_pitch = cam_pitch
-            
-            # Display the accumulated image
             disp_array = np.clip(accumulated_image, 0, 255).astype(np.uint8)
             lowres_surf = pygame.surfarray.make_surface(disp_array.transpose(1, 0, 2))
             scaled_surf = pygame.transform.scale(lowres_surf, (WINDOW_WIDTH, WINDOW_HEIGHT))
@@ -348,23 +287,21 @@ if __name__ == '__main__':
                 fps_start_time = current_time
                 fps_text = font.render(f"FPS: {fps:.2f}", True, (255, 255, 255))
                 screen.blit(fps_text, (10, 10))
-                
-                # Add status display
                 status_text = ""
                 status_color = (255, 255, 255)
-                
                 if accumulation_active:
-                    status_text = f"Accumulating: {accumulation_count}/{max_accumulation} samples"
+                    status_text = f"Accumulating: {accumulation_count - 1}/{max_accumulation} samples"
                     status_color = (0, 255, 0)
                 elif accumulation_waiting:
-                    status_text = f"Waiting for camera to settle: {frames_still_count}/{required_still_frames}"
+                    status_text = f"Waiting: {frames_still_count}/{required_still_frames}"
                     status_color = (255, 255, 0)
                 else:
                     status_text = "Camera moving"
                     status_color = (255, 100, 100)
-                
                 status_display = font.render(status_text, True, status_color)
                 screen.blit(status_display, (10, 40))
+                movement_text = font.render(f"Movement: {'Enabled' if camera_movement_enabled else 'Disabled'}", True, (255, 255, 255))
+                screen.blit(movement_text, (10, 70))
 
             pygame.display.flip()
 
