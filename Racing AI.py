@@ -4,10 +4,9 @@ import numpy as np
 import random
 import sys
 from collections import deque
-import math
 
 # Global Parameters
-NUM_CARS = 200
+NUM_CARS = 150
 MUTATION_RATE = 0.1
 MUTATION_STRENGTH = 0.45
 
@@ -22,8 +21,8 @@ GENERATION_DURATION = 15 #Seconds
 # With a frame-based duration
 GENERATION_FRAMES = GENERATION_DURATION * 60  # 15 seconds at 60 fps
 
-CAR_WIDTH = 20
-CAR_HEIGHT = 10
+CAR_WIDTH = 22
+CAR_HEIGHT = 11
 
 # Simulation dimensions
 SIM_WIDTH = 850
@@ -47,10 +46,12 @@ GRAPH_X = SIM_WIDTH - 15 + (UI_WIDTH - GRAPH_WIDTH) // 2
 GRAPH_Y = NN_PANEL_Y + NN_PANEL_HEIGHT + 20
 GRAPH_RECT = (GRAPH_X, GRAPH_Y, GRAPH_WIDTH, GRAPH_HEIGHT)
 
+BRIGHT_GREEN = (0, 255, 0)  # Highlight for alive leading car
+DARK_GREEN = (0, 100, 0)    # Highlight for dead leading car
 
 # Enhanced Physics Parameters
 WHEELBASE = 5
-MAX_STEERING_ANGLE = 0.22
+MAX_STEERING_ANGLE = 0.21
 ACCELERATION = 0.05
 FRICTION = 0.02  # New parameter for simulating friction
 CRASH_PENALTY = 10  # New parameter for penalizing crashes
@@ -105,43 +106,155 @@ def generate_ellipse_segments(center, a, b, num_segments):
         segments.append([p1, p2])
     return segments
 
-def generate_figure_eight_track(center, r, num_points, track_width):
-    t = np.linspace(0, 2 * math.pi, num_points, endpoint=False)
+def generate_square_track(center, size, track_width):
+
     cx, cy = center
-    centerline_points = [(cx + r * math.sin(ti), cy + r * math.sin(2 * ti)) for ti in t]
-    left_points = []
-    right_points = []
-    for i in range(num_points):
-        p0 = centerline_points[i]
-        p1 = centerline_points[(i + 1) % num_points]
-        dx = p1[0] - p0[0]
-        dy = p1[1] - p0[1]
-        magnitude = math.hypot(dx, dy)
-        if magnitude > 1e-6:
-            tangent = (dx / magnitude, dy / magnitude)
-            normal = (-tangent[1], tangent[0])
-            left_points.append((p0[0] + (track_width / 2) * normal[0], p0[1] + (track_width / 2) * normal[1]))
-            right_points.append((p0[0] - (track_width / 2) * normal[0], p0[1] - (track_width / 2) * normal[1]))
-        else:
-            left_points.append(p0)
-            right_points.append(p0)
+    
+    # Make the track longer by applying a multiplier to the horizontal dimension
+    length_multiplier = 1.5  # Adjust this to make the track longer
+    
+    # Make the track skinnier by reducing the track width
+    skinnier_factor = 0.9  # Adjust this to make the track skinnier
+    adjusted_track_width = track_width * skinnier_factor
+    
+    # Define the dimensions for outer boundary
+    outer_width = size * length_multiplier
+    outer_height = size
+    
+    # Define the dimensions for inner boundary
+    inner_width = outer_width - adjusted_track_width
+    inner_height = outer_height - adjusted_track_width
+    
+    # Define the exact points for the outer and inner rectangles
+    # Outer rectangle corners (clockwise from top-left)
+    outer_corners = [
+        (cx - outer_width, cy - outer_height),  # top-left
+        (cx + outer_width, cy - outer_height),  # top-right
+        (cx + outer_width, cy + outer_height),  # bottom-right
+        (cx - outer_width, cy + outer_height),  # bottom-left
+    ]
+    
+    # Inner rectangle corners (clockwise from top-left)
+    inner_corners = [
+        (cx - inner_width, cy - inner_height),  # top-left
+        (cx + inner_width, cy - inner_height),  # top-right
+        (cx + inner_width, cy + inner_height),  # bottom-right
+        (cx - inner_width, cy + inner_height),  # bottom-left
+    ]
+    
+    # Number of points to generate along each edge for smoother rendering
+    # Use more points for longer edges
+    points_per_short_edge = 20
+    points_per_long_edge = int(points_per_short_edge * length_multiplier)
+    
+    # Generate points along the outer rectangle
+    outer_points = []
+    # Top edge (longer)
+    for j in range(points_per_long_edge):
+        t = j / points_per_long_edge
+        x = outer_corners[0][0] + t * (outer_corners[1][0] - outer_corners[0][0])
+        y = outer_corners[0][1]
+        outer_points.append((x, y))
+    
+    # Right edge (shorter)
+    for j in range(points_per_short_edge):
+        t = j / points_per_short_edge
+        x = outer_corners[1][0]
+        y = outer_corners[1][1] + t * (outer_corners[2][1] - outer_corners[1][1])
+        outer_points.append((x, y))
+    
+    # Bottom edge (longer)
+    for j in range(points_per_long_edge):
+        t = j / points_per_long_edge
+        x = outer_corners[2][0] - t * (outer_corners[2][0] - outer_corners[3][0])
+        y = outer_corners[2][1]
+        outer_points.append((x, y))
+    
+    # Left edge (shorter)
+    for j in range(points_per_short_edge):
+        t = j / points_per_short_edge
+        x = outer_corners[3][0]
+        y = outer_corners[3][1] - t * (outer_corners[3][1] - outer_corners[0][1])
+        outer_points.append((x, y))
+    
+    # Generate points along the inner rectangle
+    inner_points = []
+    # Top edge (longer)
+    for j in range(points_per_long_edge):
+        t = j / points_per_long_edge
+        x = inner_corners[0][0] + t * (inner_corners[1][0] - inner_corners[0][0])
+        y = inner_corners[0][1]
+        inner_points.append((x, y))
+    
+    # Right edge (shorter)
+    for j in range(points_per_short_edge):
+        t = j / points_per_short_edge
+        x = inner_corners[1][0]
+        y = inner_corners[1][1] + t * (inner_corners[2][1] - inner_corners[1][1])
+        inner_points.append((x, y))
+    
+    # Bottom edge (longer)
+    for j in range(points_per_long_edge):
+        t = j / points_per_long_edge
+        x = inner_corners[2][0] - t * (inner_corners[2][0] - inner_corners[3][0])
+        y = inner_corners[2][1]
+        inner_points.append((x, y))
+    
+    # Left edge (shorter)
+    for j in range(points_per_short_edge):
+        t = j / points_per_short_edge
+        x = inner_corners[3][0]
+        y = inner_corners[3][1] - t * (inner_corners[3][1] - inner_corners[0][1])
+        inner_points.append((x, y))
+    
+    # Generate centerline points by averaging inner and outer points
+    centerline_points = []
+    for i in range(len(outer_points)):
+        x = (outer_points[i][0] + inner_points[i][0]) / 2
+        y = (outer_points[i][1] + inner_points[i][1]) / 2
+        centerline_points.append((x, y))
+    
+    # Create walls for inner and outer boundaries
     walls = []
-    road_polygons = []
-    for i in range(num_points):
-        j = (i + 1) % num_points
-        walls.append([left_points[i], left_points[j]])
-        walls.append([right_points[i], right_points[j]])
-        road_polygons.append([left_points[i], left_points[j], right_points[j], right_points[i]])
+    
+    # Create walls along outer boundary
+    for i in range(len(outer_points)):
+        j = (i + 1) % len(outer_points)
+        walls.append([outer_points[i], outer_points[j]])
+    
+    # Create walls along inner boundary
+    for i in range(len(inner_points)):
+        j = (i + 1) % len(inner_points)
+        walls.append([inner_points[i], inner_points[j]])
+    
+    # Create road polygon
+    road_poly = []
+    # Add outer points in order
+    for p in outer_points:
+        road_poly.append(p)
+    # Add inner points in reverse order to create a continuous polygon
+    for p in reversed(inner_points):
+        road_poly.append(p)
+    
+    road_polygons = [road_poly]
+    
+    # Create checkpoints - perpendicular lines across track at regular intervals
     checkpoints = []
-    for i in range(0, num_points, 5):  # Increased checkpoint density (from 10 to 5)
-        checkpoints.append([left_points[i], right_points[i]])
-    start_idx = 25
+    total_points = len(outer_points)
+    checkpoint_spacing = total_points // 16  # 16 checkpoints evenly spaced
+    
+    for i in range(0, total_points, checkpoint_spacing):
+        checkpoints.append([inner_points[i], outer_points[i]])
+    
+    # Set starting position and angle
+    start_idx = 0  # Start at first checkpoint (top left corner)
     start_pos = centerline_points[start_idx]
     p0 = centerline_points[start_idx]
-    p1 = centerline_points[(start_idx + 1) % num_points]
+    p1 = centerline_points[(start_idx + 1) % len(centerline_points)]
     dx = p1[0] - p0[0]
     dy = p1[1] - p0[1]
     start_angle = math.atan2(dy, dx)
+    
     return walls, road_polygons, checkpoints, start_pos, start_angle
 
 def set_track(track_type):
@@ -169,8 +282,8 @@ def set_track(track_type):
     elif track_type == "medium":
         outer_a = 250
         outer_b = 200
-        inner_a = 150
-        inner_b = 100
+        inner_a = 170
+        inner_b = 120
         num_segments = 40
         outer_walls = generate_ellipse_segments(center, outer_a, outer_b, num_segments)
         inner_walls = generate_ellipse_segments(center, inner_a, inner_b, num_segments)
@@ -188,11 +301,11 @@ def set_track(track_type):
         start_pos = (center[0] + (inner_a + outer_a) / 2, center[1])
         start_angle = math.pi / 2
     elif track_type == "hard":
-        r = 150
-        num_points = 100
-        track_width = 50
-        walls, road_polygons, checkpoints, start_pos, start_angle = generate_figure_eight_track(
-            center, r, num_points, track_width
+        # Replace figure-eight track with square track
+        square_size = 175
+        track_width = 70
+        walls, road_polygons, checkpoints, start_pos, start_angle = generate_square_track(
+            center, square_size, track_width
         )
 
 # Menu System
@@ -214,7 +327,7 @@ def menu():
         screen.blit(title_text, (SIM_WIDTH / 2 - title_text.get_width() / 2, 100))
         option1 = FONT_SMALL.render("1 - Easy (Circle Track)", True, BLACK)
         option2 = FONT_SMALL.render("2 - Medium (Oval Track)", True, BLACK)
-        option3 = FONT_SMALL.render("3 - Hard (Figure-Eight Track)", True, BLACK)
+        option3 = FONT_SMALL.render("3 - Hard (Square Track)", True, BLACK)  # Updated description
         screen.blit(option1, (SIM_WIDTH / 2 - option1.get_width() / 2, 200))
         screen.blit(option2, (SIM_WIDTH / 2 - option2.get_width() / 2, 240))
         screen.blit(option3, (SIM_WIDTH / 2 - option3.get_width() / 2, 280))
@@ -694,12 +807,19 @@ def draw_neural_network(panel_rect, nn, inputs):
         text = FONT_SMALL.render(label, True, BLACK)
         screen.blit(text, (pos[0] + 8, pos[1] - 8))
 
-def draw_car(car):
-    color = RED
-    if not car.alive:
-        color = (100, 100, 100)  # Grey for dead cars
+# Modified draw_car function
+def draw_car(car, is_best=False):
+    if is_best:
+        if car.alive:
+            color = BRIGHT_GREEN  # Leading car is alive
+        else:
+            color = DARK_GREEN   # Leading car is dead
+    elif not car.alive:
+        color = (100, 100, 100)  # Grey for dead non-leading cars
+    else:
+        color = RED              # Red for alive non-leading cars
     
-    # Draw the car body
+    # Draw the car body (example implementation, adjust as needed)
     w, h = CAR_WIDTH, CAR_HEIGHT
     local_corners = [(-w/2, -h/2), (w/2, -h/2), (w/2, h/2), (-w/2, h/2)]
     rotated = []
@@ -750,7 +870,6 @@ def elitism(cars, count=5):
     sorted_cars = sorted(cars, key=lambda x: x.fitness, reverse=True)
     return [car.nn.clone() for car in sorted_cars[:count]]
 
-# Main Simulation Loop
 def run_simulation():
     global walls, checkpoints, road_polygons, start_pos, start_angle
     generation_frame_count = 0
@@ -767,7 +886,6 @@ def run_simulation():
     
     # Generation timer
     generation_start_time = pygame.time.get_ticks()
-    
     
     # Statistics tracking
     generation_stats = []
@@ -804,29 +922,28 @@ def run_simulation():
         # Draw track
         draw_track()
         
-        # Update and draw cars
+        # Update alive cars
         alive_count = 0
-        best_car = None
-        best_fitness_current = -float('inf')
-        
         for car in cars:
             if car.alive:
-                # Get actions from neural network
                 car.decide_actions()
-                car.update(delta_time)  # Pass delta_time here
+                car.update(delta_time)
                 alive_count += 1
-                
-                # Track best car in current generation
-                if car.fitness > best_fitness_current:
-                    best_fitness_current = car.fitness
-                    best_car = car
+
+        # Find the best car among all cars (alive or dead)
+        if cars:
+            best_car = max(cars, key=lambda car: car.fitness)
+            best_fitness_current = best_car.fitness
+        else:
+            best_car = None
+            best_fitness_current = -float('inf')
         
-        # Draw cars (either all or just the best)
+        # Draw cars with highlighting for the best car
         if show_all_cars:
             for car in cars:
-                draw_car(car)
+                draw_car(car, is_best=(car == best_car))
         elif best_car:
-            draw_car(best_car)
+            draw_car(best_car, is_best=True)
         
         # Update all-time best NN if we have a new champion
         if best_fitness_current > best_fitness:
@@ -838,7 +955,6 @@ def run_simulation():
         if best_car:
             # Prepare inputs for visualization
             ray_distances = best_car.cast_rays()
-            # Remove normalized_speed
             normalized_steering = best_car.steering_angle / MAX_STEERING_ANGLE
             checkpoint_progress = best_car.current_checkpoint / len(checkpoints)
             checkpoint_angle = best_car.calculate_angle_to_next_checkpoint()
