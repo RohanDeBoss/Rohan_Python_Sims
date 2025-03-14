@@ -8,12 +8,14 @@ camera_movement_enabled = False  # New global variable
 
 # Global Variables
 NUM_CPU_CORES = multiprocessing.cpu_count() - 1
-MAX_BOUNCES = 3
+MAX_BOUNCES = 6
 focal_length = 800.0
 WINDOW_HEIGHT = 600
 WINDOW_WIDTH = int(WINDOW_HEIGHT * 1.5)
 RENDER_HEIGHT = 150
 RENDER_WIDTH = int(RENDER_HEIGHT * 1.5)
+
+
 cam_pos = np.array([150, 97, -800], dtype=np.float32)
 cam_yaw = 0.0
 cam_pitch = 0.0
@@ -218,7 +220,15 @@ if __name__ == '__main__':
                     running = False
                 elif event.key == pygame.K_SPACE:
                     camera_movement_enabled = not camera_movement_enabled
-                    
+
+        # Update mouse visibility and grab state based on camera_movement_enabled
+        if camera_movement_enabled:
+            pygame.mouse.set_visible(False)
+            pygame.event.set_grab(True)
+        else:
+            pygame.mouse.set_visible(True)
+            pygame.event.set_grab(False)
+
         # Camera Rotation and Movement
         mouse_dx, mouse_dy = pygame.mouse.get_rel()
         if camera_movement_enabled:
