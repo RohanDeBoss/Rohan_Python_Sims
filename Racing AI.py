@@ -6,17 +6,16 @@ import sys
 from collections import deque
 
 # Global Parameters
-NUM_CARS = 200
+NUM_CARS = 100
 MUTATION_RATE = 0.1
 MUTATION_STRENGTH = 0.45
 
 NUM_RAYS = 8  # Reduced from 12 to 8 rays
 VISION_CONE_ANGLE = math.pi * 0.8  # Narrower: 144 degrees instead of 225
 
-CONSTANT_SPEED = 300  # Set a single constant speed
-FRICTION = 0.0  # No need for friction when speed is constant
+CONSTANT_SPEED = 320  # Set a single constant speed for all cars
 
-GENERATION_DURATION = 15 #Seconds
+GENERATION_DURATION = 20 / 2 # 20 Seconds
 
 # With a frame-based duration
 GENERATION_FRAMES = GENERATION_DURATION * 60  # 15 seconds at 60 fps
@@ -29,7 +28,7 @@ SIM_WIDTH = 850
 SIM_HEIGHT = 600
 HEIGHT = SIM_HEIGHT
 
-UI_WIDTH = 320                # Give a bit more width on the right side
+UI_WIDTH = 320 # Give a bit more width on the right side
 WIDTH = SIM_WIDTH + UI_WIDTH  # Overall window width
 
 # NN Panel
@@ -390,6 +389,7 @@ class NeuralNetwork:
 # Enhanced Car Class with Improved Physics
 class Car:
     def __init__(self, nn):
+        self.last_checkpoint_time = pygame.time.get_ticks()
         self.nn = nn
         self.x, self.y = start_pos
         self.angle = start_angle
@@ -487,7 +487,7 @@ class Car:
         elif steering_action == 2:  # Right
             self.steering_angle = MAX_STEERING_ANGLE
 
-    def update(self, delta_time):  # Add delta_time parameter
+    def update(self, delta_time):
         if self.alive:
             # Save previous position
             self.prev_x = self.x
@@ -537,6 +537,7 @@ class Car:
                     self.current_checkpoint = new_checkpoint
                     current_time = pygame.time.get_ticks() - self.start_time
                     self.checkpoint_times[self.current_checkpoint] = current_time
+                    self.last_checkpoint_time = pygame.time.get_ticks()  # Reset timer
                     
                     # Reward for reaching a new checkpoint
                     self.fitness += 10
@@ -546,6 +547,12 @@ class Car:
                     if self.current_checkpoint == 0 and self.prev_checkpoint == len(checkpoints) - 1:
                         self.lap_count += 1
                         self.fitness += 50  # Bonus for completing a lap
+            
+            # Check if car takes too long to reach the next checkpoint
+            current_time = pygame.time.get_ticks()
+            if current_time - self.last_checkpoint_time > 5000 and self.alive:
+                self.alive = False
+                self.fitness -= 10  # Optional penalty for timing out
             
             # Check for stalling/lack of progress
             if len(self.position_history) >= 60:
@@ -877,6 +884,7 @@ def run_simulation():
 
     # Initialize first generation of cars with random NNs
     cars = [Car(NeuralNetwork()) for _ in range(NUM_CARS)]
+    is_first_frame = True  # NEW: Flag to indicate the first frame of a generation
     generation = 1
     best_fitness = -float('inf')
     best_nn = None
@@ -919,13 +927,16 @@ def run_simulation():
         # Draw track
         draw_track()
         
-        # Update alive cars
-        alive_count = 0
-        for car in cars:
-            if car.alive:
-                car.decide_actions()
-                car.update(delta_time)
-                alive_count += 1
+        # NEW: Update alive cars only if not the first frame
+        if not is_first_frame:
+            alive_count = 0
+            for car in cars:
+                if car.alive:
+                    car.decide_actions()
+                    car.update(delta_time)
+                    alive_count += 1
+        else:
+            alive_count = NUM_CARS  # All cars are alive on the first frame
 
         # Find the best car among all cars (alive or dead)
         if cars:
@@ -941,6 +952,10 @@ def run_simulation():
                 draw_car(car, is_best=(car == best_car))
         elif best_car:
             draw_car(best_car, is_best=True)
+        
+        # NEW: After drawing the first frame, reset the flag
+        if is_first_frame:
+            is_first_frame = False
         
         # Update all-time best NN if we have a new champion
         if best_fitness_current > best_fitness:
@@ -968,14 +983,14 @@ def run_simulation():
         
         # Display stats
         stats = [
-            f"FPS: {clock.get_fps():.1f}",  # Add this line
+            f"FPS: {clock.get_fps():.1f}",
             f"Generation: {generation}",
-            f"Time: {generation_frame_count/60:.2f}s/{GENERATION_FRAMES/60:.2f}s ({(generation_frame_count/GENERATION_FRAMES)*100:.0f}%)",    
+            f"Time: {(generation_frame_count / 60) * 2:.2f}s/{(GENERATION_FRAMES / 60) * 2:.2f}s ({(generation_frame_count / GENERATION_FRAMES) * 100:.0f}%)",
             f"Cars Alive: {alive_count}/{NUM_CARS}",
             f"Best Fitness: {best_fitness:.2f}",
             f"Current Best: {best_fitness_current:.2f}",
-        ]
-        
+        ]    
+
         if best_car:
             stats.extend([
                 f"Speed: {best_car.speed:.2f}",
@@ -1040,6 +1055,7 @@ def run_simulation():
             
             # Reset generation timer
             generation_frame_count = 0
+            is_first_frame = True  # NEW: Reset flag for the new generation
             
             # Display generation change message
             gen_msg = f"Generation {generation} started!"
