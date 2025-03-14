@@ -840,12 +840,9 @@ def draw_car(car, is_best=False):
     pygame.draw.circle(screen, BLACK, (int(front_x), int(front_y)), 3)
 
 # Enhanced Selection Methods
-def tournament_selection(cars, k=3):
+def tournament_selection(cars, k=5):  # Changed k from 3 to 5
     """Tournament selection: randomly select k cars and return the best one"""
-    selected = []
-    for _ in range(k):
-        idx = random.randint(0, len(cars) - 1)
-        selected.append(cars[idx])
+    selected = random.sample(cars, k)  # Using random.sample for efficiency
     return max(selected, key=lambda car: car.fitness)
 
 def roulette_wheel_selection(cars):
@@ -859,7 +856,7 @@ def roulette_wheel_selection(cars):
         current += max(0.1, car.fitness)
         if current >= pick:
             return car
-    return cars[-1]  # Fallback
+    return cars[-1]  # Fallback to the last car
 
 def select_parents(cars, selection_method="tournament"):
     """Select parents for reproduction using the specified method"""
@@ -868,7 +865,6 @@ def select_parents(cars, selection_method="tournament"):
     else:
         return roulette_wheel_selection(cars)
 
-# Elite Selection - keep the best performing cars
 def elitism(cars, count=5):
     """Select the top performing cars to keep unchanged"""
     sorted_cars = sorted(cars, key=lambda x: x.fitness, reverse=True)
@@ -884,7 +880,7 @@ def run_simulation():
 
     # Initialize first generation of cars with random NNs
     cars = [Car(NeuralNetwork()) for _ in range(NUM_CARS)]
-    is_first_frame = True  # NEW: Flag to indicate the first frame of a generation
+    is_first_frame = True
     generation = 1
     best_fitness = -float('inf')
     best_nn = None
@@ -897,12 +893,10 @@ def run_simulation():
     
     running = True
     paused = False
-    show_all_cars = True  # Toggle to only show best car
+    show_all_cars = True
     
-    # Main game loop
     while running:
-        # Calculate delta_time at the start of the loop
-        delta_time = clock.tick(60) / 1000.0  # Convert milliseconds to seconds
+        delta_time = clock.tick(60) / 1000.0
         generation_frame_count += 1
 
         for event in pygame.event.get():
@@ -914,20 +908,15 @@ def run_simulation():
                 elif event.key == pygame.K_a:
                     show_all_cars = not show_all_cars
                 elif event.key == pygame.K_n:
-                    # Skip to next generation
                     generation_start_time = 0
         
         if paused:
             pygame.time.delay(100)
             continue
 
-        # Clear screen
         screen.fill(WHITE)
-        
-        # Draw track
         draw_track()
         
-        # NEW: Update alive cars only if not the first frame
         if not is_first_frame:
             alive_count = 0
             for car in cars:
@@ -936,9 +925,8 @@ def run_simulation():
                     car.update(delta_time)
                     alive_count += 1
         else:
-            alive_count = NUM_CARS  # All cars are alive on the first frame
+            alive_count = NUM_CARS
 
-        # Find the best car among all cars (alive or dead)
         if cars:
             best_car = max(cars, key=lambda car: car.fitness)
             best_fitness_current = best_car.fitness
@@ -946,42 +934,29 @@ def run_simulation():
             best_car = None
             best_fitness_current = -float('inf')
         
-        # Draw cars with highlighting for the best car
         if show_all_cars:
             for car in cars:
                 draw_car(car, is_best=(car == best_car))
         elif best_car:
             draw_car(best_car, is_best=True)
         
-        # NEW: After drawing the first frame, reset the flag
         if is_first_frame:
             is_first_frame = False
         
-        # Update all-time best NN if we have a new champion
         if best_fitness_current > best_fitness:
             best_fitness = best_fitness_current
             if best_car:
                 best_nn = best_car.nn.clone()
         
-        # Draw neural network visualization for best car
         if best_car:
-            # Prepare inputs for visualization
             ray_distances = best_car.cast_rays()
             normalized_steering = best_car.steering_angle / MAX_STEERING_ANGLE
             checkpoint_progress = best_car.current_checkpoint / len(checkpoints)
             checkpoint_angle = best_car.calculate_angle_to_next_checkpoint()
-
-            inputs = np.concatenate([
-                ray_distances, 
-                [normalized_steering, checkpoint_progress, checkpoint_angle]
-            ])          
-            # Draw neural network visualization
+            inputs = np.concatenate([ray_distances, [normalized_steering, checkpoint_progress, checkpoint_angle]])
             draw_neural_network(NN_PANEL_RECT, best_car.nn, inputs)
-            
-            # Draw performance graph
             draw_performance_graph(GRAPH_RECT, generation_stats)
         
-        # Display stats
         stats = [
             f"FPS: {clock.get_fps():.1f}",
             f"Generation: {generation}",
@@ -989,8 +964,7 @@ def run_simulation():
             f"Cars Alive: {alive_count}/{NUM_CARS}",
             f"Best Fitness: {best_fitness:.2f}",
             f"Current Best: {best_fitness_current:.2f}",
-        ]    
-
+        ]
         if best_car:
             stats.extend([
                 f"Speed: {best_car.speed:.2f}",
@@ -998,18 +972,14 @@ def run_simulation():
                 f"Checkpoint: {best_car.current_checkpoint}/{len(checkpoints)}",
                 f"Distance: {best_car.distance_traveled:.1f}"
             ])
-        
-        # Draw stats text
         for i, text in enumerate(stats):
             text_surface = FONT_SMALL.render(text, True, BLACK)
             screen.blit(text_surface, (10, 10 + i * 24))
         
-        # Check if generation time is up or all cars are dead
         current_time = pygame.time.get_ticks()
         generation_elapsed = current_time - generation_start_time
         
         if generation_frame_count >= GENERATION_FRAMES or alive_count == 0:
-            # Calculate best_fitness_current as the max of ALL cars (alive or dead)
             best_fitness_current = max(car.fitness for car in cars)
             avg_fitness = sum(car.fitness for car in cars) / NUM_CARS
             generation_stats.append({
@@ -1023,49 +993,51 @@ def run_simulation():
             new_generation = []
             
             # Elitism: keep the best performers
-            elite_count = max(3, NUM_CARS // 10)  # 10% of population or at least 3
+            elite_count = max(3, NUM_CARS // 10)  # 10% or at least 3
             elite_nns = elitism(cars, elite_count)
-            
             for nn in elite_nns:
                 new_generation.append(Car(nn))
             
-            # Fill rest with offspring from selection, crossover, and mutation
+            # Add mutants of the top cars
+            top_cars = sorted(cars, key=lambda x: x.fitness, reverse=True)[:5]
+            for i, top_car in enumerate(top_cars):
+                num_mutants = 2  # Default number of mutants per top car
+                if i == 0:  # For the best car (index 0)
+                    num_mutants += 2  # Add 2 more mutants, making it 4 total
+                for _ in range(num_mutants):
+                    mutant_nn = top_car.nn.mutate()
+                    new_generation.append(Car(mutant_nn))
+            
+            # Fill rest with crossover offspring
             while len(new_generation) < NUM_CARS:
-                # Tournament or roulette wheel selection
                 parent1 = select_parents(cars, "tournament")
                 parent2 = select_parents(cars, "tournament")
                 
-                # Crossover
-                if random.random() < 0.7:  # 70% chance of crossover
+                # Crossover with increased probability
+                if random.random() < 0.85:  # Probability of crossover
                     child_nn = parent1.nn.crossover(parent2.nn)
                 else:
-                    # No crossover, just clone one parent
                     child_nn = parent1.nn.clone() if random.random() < 0.5 else parent2.nn.clone()
                 
-                # Mutation (with adaptive rate based on generation)
+                # Mutation with dynamic rate
                 mutation_rate = MUTATION_RATE * (1.0 - min(0.5, generation / 100))
                 child_nn = child_nn.mutate(mutation_rate=mutation_rate)
                 
-                # Add to new generation
                 new_generation.append(Car(child_nn))
             
-            # Replace old generation with new
             cars = new_generation
             generation += 1
-            
-            # Reset generation timer
             generation_frame_count = 0
-            is_first_frame = True  # NEW: Reset flag for the new generation
+            is_first_frame = True
             
-            # Display generation change message
             gen_msg = f"Generation {generation} started!"
             gen_text = FONT_MEDIUM.render(gen_msg, True, BLUE)
             screen.blit(gen_text, (SIM_WIDTH // 2 - gen_text.get_width() // 2, 50))
             pygame.display.flip()
-            pygame.time.delay(1000)  # Pause briefly to show generation change
+            pygame.time.delay(1000)
         
         pygame.display.flip()
-        delta_time = clock.tick(60) / 1000.0  # Convert milliseconds to seconds
+        delta_time = clock.tick(60) / 1000.0
 
     pygame.quit()
 
