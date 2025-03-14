@@ -238,7 +238,7 @@ def generate_square_track(center, size, track_width):
     # Create checkpoints - perpendicular lines across track at regular intervals
     checkpoints = []
     total_points = len(outer_points)
-    checkpoint_spacing = total_points // 25  # Changed from 16 to 25 for more frequent checkpoints
+    checkpoint_spacing = total_points // 25  # Changed from 16 to 24 for more frequent checkpoints
 
     for i in range(0, total_points, checkpoint_spacing):
         checkpoints.append([inner_points[i], outer_points[i]])
@@ -256,8 +256,8 @@ def generate_square_track(center, size, track_width):
 
 def set_track(track_type):
     global center, walls, checkpoints, road_polygons, start_pos, start_angle
-    center = (SIM_WIDTH // 2, SIM_HEIGHT // 2)
     if track_type == "easy":
+        center = (SIM_WIDTH // 2 + 50, SIM_HEIGHT // 2)  # Shifted right to (475, 300)
         outer_radius = 250
         inner_radius = 150
         num_segments = 40
@@ -269,7 +269,7 @@ def set_track(track_type):
         track_points = outer_points + inner_points[::-1]
         road_polygons = [track_points]
         checkpoints.clear()
-        for i in range(20):  # Increased from 10 to 20 checkpoints
+        for i in range(20):
             angle = 2 * math.pi * i / 20
             p_inner = (center[0] + inner_radius * math.cos(angle), center[1] + inner_radius * math.sin(angle))
             p_outer = (center[0] + outer_radius * math.cos(angle), center[1] + outer_radius * math.sin(angle))
@@ -277,6 +277,7 @@ def set_track(track_type):
         start_pos = (center[0] + (inner_radius + outer_radius) / 2, center[1])
         start_angle = math.pi / 2
     elif track_type == "medium":
+        center = (SIM_WIDTH // 2 + 50, SIM_HEIGHT // 2)  # Shifted right to (475, 300)
         outer_a = 250
         outer_b = 200
         inner_a = 170
@@ -290,7 +291,7 @@ def set_track(track_type):
         track_points = outer_points + inner_points[::-1]
         road_polygons = [track_points]
         checkpoints.clear()
-        for i in range(20):  # Increased from 10 to 20 checkpoints
+        for i in range(20):
             angle = 2 * math.pi * i / 20
             p_inner = (center[0] + inner_a * math.cos(angle), center[1] + inner_b * math.sin(angle))
             p_outer = (center[0] + outer_a * math.cos(angle), center[1] + outer_b * math.sin(angle))
@@ -298,7 +299,7 @@ def set_track(track_type):
         start_pos = (center[0] + (inner_a + outer_a) / 2, center[1])
         start_angle = math.pi / 2
     elif track_type == "hard":
-        hard_center = (center[0] + 50, center[1] + 50)  # New center: (475, 350)
+        hard_center = (SIM_WIDTH // 2 + 50, SIM_HEIGHT // 2 + 50)  # Remains at (475, 350)
         square_size = 175
         track_width = 70
         walls, road_polygons, checkpoints, start_pos, start_angle = generate_square_track(
@@ -319,15 +320,19 @@ def menu():
                     return "medium"
                 elif event.key == pygame.K_3:
                     return "hard"
+                elif event.key == pygame.K_4:  # New option
+                    return "impossible"
         screen.fill(WHITE)
         title_text = FONT_MEDIUM.render("Select Track Difficulty", True, BLACK)
         screen.blit(title_text, (SIM_WIDTH / 2 - title_text.get_width() / 2, 100))
         option1 = FONT_SMALL.render("1 - Easy (Circle Track)", True, BLACK)
         option2 = FONT_SMALL.render("2 - Medium (Oval Track)", True, BLACK)
-        option3 = FONT_SMALL.render("3 - Hard (Square Track)", True, BLACK)  # Updated description
+        option3 = FONT_SMALL.render("3 - Hard (Square Track)", True, BLACK)
+        option4 = FONT_SMALL.render("4 - Impossible (Random Track Each Generation)", True, BLACK)
         screen.blit(option1, (SIM_WIDTH / 2 - option1.get_width() / 2, 200))
         screen.blit(option2, (SIM_WIDTH / 2 - option2.get_width() / 2, 240))
         screen.blit(option3, (SIM_WIDTH / 2 - option3.get_width() / 2, 280))
+        screen.blit(option4, (SIM_WIDTH / 2 - option4.get_width() / 2, 320))
         pygame.display.flip()
         clock.tick(60)
 
@@ -874,9 +879,21 @@ def run_simulation():
     global walls, checkpoints, road_polygons, start_pos, start_angle
     generation_frame_count = 0
 
-    # Select track from menu
+    # Select difficulty from menu
     track_type = menu()
-    set_track(track_type)
+    
+    # Define track options based on difficulty
+    if track_type == "impossible":
+        track_options = ["easy", "medium", "hard"]
+        current_track = random.choice(track_options)  # Initial random track
+        previous_track = current_track  # Track the previous track
+    else:
+        track_options = [track_type]
+        current_track = track_type
+        previous_track = None  # No need to track for fixed tracks
+    
+    # Set up the initial track
+    set_track(current_track)
 
     # Initialize first generation of cars with random NNs
     cars = [Car(NeuralNetwork()) for _ in range(NUM_CARS)]
@@ -972,6 +989,9 @@ def run_simulation():
                 f"Checkpoint: {best_car.current_checkpoint}/{len(checkpoints)}",
                 f"Distance: {best_car.distance_traveled:.1f}"
             ])
+        if track_type == "impossible":
+            stats.append(f"Current Track: {current_track}")
+        
         for i, text in enumerate(stats):
             text_surface = FONT_SMALL.render(text, True, BLACK)
             screen.blit(text_surface, (10, 10 + i * 24))
@@ -989,11 +1009,21 @@ def run_simulation():
                 'alive_count': alive_count
             })
             
+            # Randomize track for impossible mode, ensuring no consecutive repeats
+            if track_type == "impossible":
+                available_tracks = [t for t in track_options if t != previous_track]
+                new_track = random.choice(available_tracks)
+                current_track = new_track
+                previous_track = current_track
+                set_track(current_track)
+            else:
+                set_track(current_track)  # Re-set the track, though it's the same
+            
             # Create next generation
             new_generation = []
             
             # Elitism: keep the best performers
-            elite_count = max(3, NUM_CARS // 10)  # 10% or at least 3
+            elite_count = max(3, NUM_CARS // 10)
             elite_nns = elitism(cars, elite_count)
             for nn in elite_nns:
                 new_generation.append(Car(nn))
@@ -1001,9 +1031,9 @@ def run_simulation():
             # Add mutants of the top cars
             top_cars = sorted(cars, key=lambda x: x.fitness, reverse=True)[:5]
             for i, top_car in enumerate(top_cars):
-                num_mutants = 2  # Default number of mutants per top car
-                if i == 0:  # For the best car (index 0)
-                    num_mutants += 2  # Add 2 more mutants, making it 4 total
+                num_mutants = 2
+                if i == 0:
+                    num_mutants += 2
                 for _ in range(num_mutants):
                     mutant_nn = top_car.nn.mutate()
                     new_generation.append(Car(mutant_nn))
@@ -1013,19 +1043,40 @@ def run_simulation():
                 parent1 = select_parents(cars, "tournament")
                 parent2 = select_parents(cars, "tournament")
                 
-                # Crossover with increased probability
-                if random.random() < 0.85:  # Probability of crossover
+                if random.random() < 0.85:
                     child_nn = parent1.nn.crossover(parent2.nn)
                 else:
                     child_nn = parent1.nn.clone() if random.random() < 0.5 else parent2.nn.clone()
                 
-                # Mutation with dynamic rate
                 mutation_rate = MUTATION_RATE * (1.0 - min(0.5, generation / 100))
                 child_nn = child_nn.mutate(mutation_rate=mutation_rate)
                 
                 new_generation.append(Car(child_nn))
             
+            # Reset cars for the new generation and track
             cars = new_generation
+            for car in cars:
+                car.x, car.y = start_pos
+                car.angle = start_angle
+                car.alive = True
+                car.fitness = 0
+                car.raw_fitness = 0
+                car.distance_traveled = 0
+                car.current_checkpoint = 0
+                car.prev_checkpoint = 0
+                car.lap_count = 0
+                car.prev_x = car.x
+                car.prev_y = car.y
+                car.idle_time = 0
+                car.wrong_way = False
+                car.crashes = 0
+                car.start_time = pygame.time.get_ticks()
+                car.checkpoint_times.clear()
+                car.position_history.clear()
+                car.avg_speed.clear()
+                for _ in range(10):
+                    car.position_history.append((car.x, car.y))
+            
             generation += 1
             generation_frame_count = 0
             is_first_frame = True
