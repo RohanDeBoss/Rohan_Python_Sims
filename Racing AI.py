@@ -6,7 +6,7 @@ import sys
 from collections import deque
 
 # Global Parameters
-NUM_CARS = 150
+NUM_CARS = 200
 MUTATION_RATE = 0.1
 MUTATION_STRENGTH = 0.45
 
@@ -51,9 +51,7 @@ DARK_GREEN = (0, 100, 0)    # Highlight for dead leading car
 
 # Enhanced Physics Parameters
 WHEELBASE = 5
-MAX_STEERING_ANGLE = 0.21
-ACCELERATION = 0.05
-FRICTION = 0.02  # New parameter for simulating friction
+MAX_STEERING_ANGLE = 0.21  # 12 degrees in radians
 CRASH_PENALTY = 10  # New parameter for penalizing crashes
 
 # Pygame Initialization
@@ -114,7 +112,7 @@ def generate_square_track(center, size, track_width):
     length_multiplier = 1.5  # Adjust this to make the track longer
     
     # Make the track skinnier by reducing the track width
-    skinnier_factor = 0.9  # Adjust this to make the track skinnier
+    skinnier_factor = 0.95  # Adjust this to make the track skinnier
     adjusted_track_width = track_width * skinnier_factor
     
     # Define the dimensions for outer boundary
@@ -241,11 +239,11 @@ def generate_square_track(center, size, track_width):
     # Create checkpoints - perpendicular lines across track at regular intervals
     checkpoints = []
     total_points = len(outer_points)
-    checkpoint_spacing = total_points // 16  # 16 checkpoints evenly spaced
-    
+    checkpoint_spacing = total_points // 25  # Changed from 16 to 25 for more frequent checkpoints
+
     for i in range(0, total_points, checkpoint_spacing):
         checkpoints.append([inner_points[i], outer_points[i]])
-    
+
     # Set starting position and angle
     start_idx = 0  # Start at first checkpoint (top left corner)
     start_pos = centerline_points[start_idx]
@@ -301,11 +299,11 @@ def set_track(track_type):
         start_pos = (center[0] + (inner_a + outer_a) / 2, center[1])
         start_angle = math.pi / 2
     elif track_type == "hard":
-        # Replace figure-eight track with square track
+        hard_center = (center[0] + 50, center[1] + 50)  # New center: (475, 350)
         square_size = 175
         track_width = 70
         walls, road_polygons, checkpoints, start_pos, start_angle = generate_square_track(
-            center, square_size, track_width
+            hard_center, square_size, track_width
         )
 
 # Menu System
@@ -397,7 +395,6 @@ class Car:
         self.angle = start_angle
         self.speed = CONSTANT_SPEED  # Use constant speed
         self.steering_angle = 0
-        # Remove acceleration
         self.alive = True
         self.fitness = 0
         self.raw_fitness = 0  # Tracks fitness without penalties
@@ -971,11 +968,12 @@ def run_simulation():
         
         # Display stats
         stats = [
+            f"FPS: {clock.get_fps():.1f}",  # Add this line
             f"Generation: {generation}",
+            f"Time: {generation_frame_count/60:.2f}s/{GENERATION_FRAMES/60:.2f}s ({(generation_frame_count/GENERATION_FRAMES)*100:.0f}%)",    
             f"Cars Alive: {alive_count}/{NUM_CARS}",
             f"Best Fitness: {best_fitness:.2f}",
             f"Current Best: {best_fitness_current:.2f}",
-            f"Time: {generation_frame_count/60:.2f}s/{GENERATION_FRAMES/60:.2f}s ({(generation_frame_count/GENERATION_FRAMES)*100:.0f}%)"
         ]
         
         if best_car:
@@ -989,7 +987,7 @@ def run_simulation():
         # Draw stats text
         for i, text in enumerate(stats):
             text_surface = FONT_SMALL.render(text, True, BLACK)
-            screen.blit(text_surface, (10, 10 + i * 25))
+            screen.blit(text_surface, (10, 10 + i * 24))
         
         # Check if generation time is up or all cars are dead
         current_time = pygame.time.get_ticks()
