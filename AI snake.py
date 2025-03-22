@@ -9,8 +9,10 @@ import time
 from collections import deque
 
 # --------------------- Constants ---------------------
-GRID_SIZE = 20
-CELL_SIZE = 20
+Max_Sim_Time = 100  # seconds
+
+GRID_SIZE = 10
+CELL_SIZE = 40
 SIM_WIDTH = GRID_SIZE * CELL_SIZE   # 400 pixels
 SIM_HEIGHT = GRID_SIZE * CELL_SIZE  # 400 pixels
 
@@ -23,7 +25,7 @@ RIGHT_PANEL_WIDTH = WINDOW_WIDTH - LEFT_PANEL_WIDTH
 CONTROL_AREA_HEIGHT = 200
 STATS_AREA_HEIGHT = WINDOW_HEIGHT - CONTROL_AREA_HEIGHT
 
-NUM_AGENTS = 30
+NUM_AGENTS = 20 # Number of agents in the simulation
 BATCH_SIZE = 32
 REPLAY_BUFFER_SIZE = 10000
 EPSILON_START = 1.0
@@ -47,7 +49,6 @@ FOOD_COLOR = (255, 50, 50)
 TEXT_COLOR = (220, 220, 220)
 GRAPH_BACKGROUND = (20, 20, 40)
 GRAPH_LINE_COLOR = (50, 200, 100)
-GRAPH_GRID_COLOR = (50, 50, 80)
 
 # --------------------- Global Variables ---------------------
 speed_multiplier = DEFAULT_SPEED_MULTIPLIER
@@ -149,7 +150,6 @@ class ReplayBuffer:
 class DQN(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(DQN, self).__init__()
-        self.layer_sizes = [input_dim, 64, 64, output_dim]
         self.net = nn.Sequential(
             nn.Linear(input_dim, 64),
             nn.ReLU(),
@@ -175,9 +175,7 @@ class DQNAgent:
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=LEARNING_RATE)
         self.replay_buffer = ReplayBuffer(REPLAY_BUFFER_SIZE)
         self.steps = 0
-        self.losses = deque(maxlen=100)
         self.episodes = 0
-        self.total_reward = 0
 
     def select_action(self, state, epsilon):
         if random.random() < epsilon:
@@ -189,10 +187,8 @@ class DQNAgent:
     def store_experience(self, experience):
         state, action, reward, next_state, done = experience
         self.replay_buffer.add(experience)
-        self.total_reward += reward
         if done:
             self.episodes += 1
-            self.total_reward = 0
 
     def update_network(self):
         if len(self.replay_buffer) < BATCH_SIZE:
@@ -213,7 +209,6 @@ class DQNAgent:
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
-        self.losses.append(loss.item())
         self.steps += 1
         if self.steps % TARGET_UPDATE_FREQ == 0:
             self.target_net.load_state_dict(self.policy_net.state_dict())
@@ -222,25 +217,25 @@ class DQNAgent:
 class StatsTracker:
     def __init__(self, num_agents):
         self.num_agents = num_agents
-        self.avg_scores = []
-        self.current_max_scores = []
-        self.training_steps = 0
+        self.generation_avg_scores = []
+        self.generation_max_scores = []
+        self.generation = 0
 
-    def update(self, games, agents):
-        self.training_steps += 1
-        if self.training_steps % 10 == 0:
-            avg_score = np.mean([game.score for game in games])
-            current_max_score = max([game.score for game in games])
-            self.avg_scores.append(avg_score)
-            self.current_max_scores.append(current_max_score)
+    def update(self, games):
+        scores = [game.score for game in games]
+        avg_score = np.mean(scores)
+        max_score = max(scores)
+        self.generation_avg_scores.append(avg_score)
+        self.generation_max_scores.append(max_score)
+        self.generation += 1
 
-    def get_surface(self, width, height, games, agents):
+    def get_surface(self, width, height):
         surface = pygame.Surface((width, height))
         surface.fill(GRAPH_BACKGROUND)
         font = pygame.font.Font(None, 20)
         
-        if len(self.avg_scores) < 2:
-            msg = font.render(f"Gathering training data... ({len(self.avg_scores)} data points)", True, TEXT_COLOR)
+        if self.generation < 2:
+            msg = font.render(f"Gathering data... ({self.generation} generations)", True, TEXT_COLOR)
             surface.blit(msg, (width//2 - msg.get_width()//2, height//2 - msg.get_height()//2))
             return surface
 
@@ -248,7 +243,7 @@ class StatsTracker:
 
         def plot_line(data, color):
             pts = []
-            max_val = max(max(self.avg_scores), max(self.current_max_scores)) if self.avg_scores and self.current_max_scores else 1
+            max_val = max(max(self.generation_avg_scores), max(self.generation_max_scores)) if self.generation_avg_scores else 1
             for i, val in enumerate(data):
                 x = plot_area.x + int(i / (len(data) - 1) * plot_area.width) if len(data) > 1 else plot_area.x
                 y = plot_area.bottom - int((val / max_val) * plot_area.height)
@@ -256,15 +251,15 @@ class StatsTracker:
             if len(pts) > 1:
                 pygame.draw.lines(surface, color, False, pts, 2)
 
-        plot_line(self.avg_scores, GRAPH_LINE_COLOR)
-        plot_line(self.current_max_scores, (255, 255, 100))
+        plot_line(self.generation_avg_scores, GRAPH_LINE_COLOR)
+        plot_line(self.generation_max_scores, (255, 255, 100))
 
-        # Draw axes
+        # Axes
         pygame.draw.line(surface, TEXT_COLOR, (plot_area.x, plot_area.bottom), (plot_area.x, plot_area.y), 1)  # Y-axis
         pygame.draw.line(surface, TEXT_COLOR, (plot_area.x, plot_area.bottom), (plot_area.right, plot_area.bottom), 1)  # X-axis
 
-        # Y-axis markers (scores)
-        max_val = max(max(self.avg_scores), max(self.current_max_scores)) if self.avg_scores and self.current_max_scores else 1
+        # Y-axis (scores)
+        max_val = max(max(self.generation_avg_scores), max(self.generation_max_scores)) if self.generation_avg_scores else 1
         step_size = max(1, int(max_val / 5))
         for val in range(0, int(max_val) + 1, step_size):
             y = plot_area.bottom - int((val / max_val) * plot_area.height)
@@ -272,86 +267,79 @@ class StatsTracker:
             label = font.render(str(val), True, TEXT_COLOR)
             surface.blit(label, (plot_area.x - 30, y - label.get_height() // 2))
 
-        # X-axis markers (generation number)
-        total_episodes = sum(agent.episodes for agent in agents)
-        num_points = len(self.avg_scores)
-        episodes_per_point = total_episodes / num_points if num_points > 0 else 1
-        step_interval = max(1, num_points // 5)
-        for i in range(0, num_points, step_interval):
-            x = plot_area.x + int(i / (num_points - 1) * plot_area.width) if num_points > 1 else plot_area.x
+        # X-axis (generations)
+        num_generations = self.generation
+        step_interval = max(1, num_generations // 5)
+        for i in range(0, num_generations, step_interval):
+            x = plot_area.x + int(i / (num_generations - 1) * plot_area.width) if num_generations > 1 else plot_area.x
             pygame.draw.line(surface, TEXT_COLOR, (x, plot_area.bottom), (x, plot_area.bottom + 5), 1)
-            gen_num = int(i * episodes_per_point)
-            label = font.render(str(gen_num), True, TEXT_COLOR)
+            label = font.render(str(i), True, TEXT_COLOR)
             surface.blit(label, (x - label.get_width() // 2, plot_area.bottom + 5))
 
         # Labels
         avg_label = font.render("Avg Score", True, GRAPH_LINE_COLOR)
-        surface.blit(avg_label, (width - avg_label.get_width() - 10, 10))
-        max_label = font.render("Best Score", True, (255, 255, 100))
-        surface.blit(max_label, (width - max_label.get_width() - 10, 30))
-
-        # Current values
-        current_avg_score = np.mean([game.score for game in games])
-        current_best_score = max([game.score for game in games])
-        current_avg_text = font.render(f"Current Avg: {current_avg_score:.2f}", True, GRAPH_LINE_COLOR)
-        current_best_text = font.render(f"Current Best: {current_best_score}", True, (255, 255, 100))
-        surface.blit(current_avg_text, (10, 10))
-        surface.blit(current_best_text, (10, 30))
+        surface.blit(avg_label, (width - avg_label.get_width() - 20, 10))
+        max_label = font.render("Max Score", True, (255, 255, 100))
+        surface.blit(max_label, (width - max_label.get_width() - 20, 30))
 
         return surface
 
 def visualize_network(agent, surface):
     surface.fill(GRAPH_BACKGROUND)
-    try:
-        weights = agent.policy_net.get_weights()
-        layers = agent.policy_net.layer_sizes
-        padding = 20
-        layer_width = (surface.get_width() - 2 * padding) / (len(layers) - 1)
-        max_neurons = max(layers)
-        neuron_radius = max(4, int((surface.get_height() - 2 * padding) / (2 * max_neurons)))
-        positions = []
-        for i, n in enumerate(layers):
-            x = padding + i * layer_width
-            y_spacing = (surface.get_height() - 2 * padding) / n
-            layer_positions = [(int(x), int(padding + y_spacing * (j + 0.5))) for j in range(n)]
-            positions.append(layer_positions)
-            for pos in layer_positions:
-                pygame.draw.circle(surface, TEXT_COLOR, pos, neuron_radius)
-        for i in range(len(layers)-1):
-            weight_matrix = weights[i]
-            norm = np.max(np.abs(weight_matrix)) + 1e-5
-            for j, pos1 in enumerate(positions[i]):
-                for k, pos2 in enumerate(positions[i+1]):
-                    if layers[i]*layers[i+1] > 100 and random.random() > 0.3:
-                        continue
-                    weight = weight_matrix[k, j] / norm
-                    color = (0, min(255, int(255 * weight + 128)), 0) if weight > 0 else (min(255, int(255 * abs(weight) + 128)), 0, 0)
-                    pygame.draw.line(surface, color, pos1, pos2, max(1, int(2 * abs(weight))))
-        font = pygame.font.Font(None, 24)
-        title = font.render("Neural Network", True, TEXT_COLOR)
-        surface.blit(title, (surface.get_width()//2 - title.get_width()//2, 5))
-    except Exception as e:
-        font = pygame.font.Font(None, 24)
-        err = font.render("NN visualization error", True, (255, 100, 100))
-        surface.blit(err, (surface.get_width()//2 - err.get_width()//2, surface.get_height()//2))
-    return surface
+    weights = agent.policy_net.get_weights()
+    layers = [9, 64, 64, 3]  # Input dim, hidden layers, output dim
+    padding = 20
+    layer_width = (surface.get_width() - 2 * padding) / (len(layers) - 1)
+    max_neurons = max(layers)
+    neuron_radius = max(4, int((surface.get_height() - 2 * padding) / (2 * max_neurons)))
+    positions = []
+    for i, n in enumerate(layers):
+        x = padding + i * layer_width
+        y_spacing = (surface.get_height() - 2 * padding) / n
+        layer_positions = [(int(x), int(padding + y_spacing * (j + 0.5))) for j in range(n)]
+        positions.append(layer_positions)
+        for pos in layer_positions:
+            pygame.draw.circle(surface, TEXT_COLOR, pos, neuron_radius)
+    for i in range(len(layers)-1):
+        weight_matrix = weights[i]
+        norm = np.max(np.abs(weight_matrix)) + 1e-5
+        for j, pos1 in enumerate(positions[i]):
+            for k, pos2 in enumerate(positions[i+1]):
+                if layers[i]*layers[i+1] > 100 and random.random() > 0.3:
+                    continue
+                weight = weight_matrix[k, j] / norm
+                color = (0, min(255, int(255 * weight + 128)), 0) if weight > 0 else (min(255, int(255 * abs(weight) + 128)), 0, 0)
+                pygame.draw.line(surface, color, pos1, pos2, max(1, int(2 * abs(weight))))
+    font = pygame.font.Font(None, 24)
+    title = font.render("Neural Network", True, TEXT_COLOR)
+    surface.blit(title, (surface.get_width()//2 - title.get_width()//2, 5))
 
 # --------------------- Training Loop ---------------------
 def training_loop(games, agents, stats_tracker, stop_event):
     global speed_multiplier, training_paused
     while not stop_event.is_set():
         if not training_paused:
-            for _ in range(speed_multiplier):
-                for game, agent in zip(games, agents):
-                    state = game._get_state()
-                    epsilon = max(EPSILON_END, EPSILON_START - (EPSILON_START - EPSILON_END) * (agent.steps / EPSILON_DECAY))
-                    action = agent.select_action(state, epsilon)
-                    next_state, reward, done = game.step(action)
-                    agent.store_experience((state, action, reward, next_state, done))
-                    agent.update_network()
-                    if done:
-                        game.reset()
-                stats_tracker.update(games, agents)
+            # Start a new generation
+            for game in games:
+                game.reset()
+            generation_ticks = 0
+            max_generation_ticks = Max_Sim_Time * 60  # convert seconds to ticks
+            while generation_ticks < max_generation_ticks and not all(game.done for game in games):
+                for _ in range(speed_multiplier):
+                    # Take one collective step for all alive agents
+                    for game, agent in zip(games, agents):
+                        if not game.done:
+                            state = game._get_state()
+                            epsilon = max(EPSILON_END, EPSILON_START - (EPSILON_START - EPSILON_END) * (agent.steps / EPSILON_DECAY))
+                            action = agent.select_action(state, epsilon)
+                            next_state, reward, done = game.step(action)
+                            agent.store_experience((state, action, reward, next_state, done))
+                            agent.update_network()
+                    generation_ticks += 1
+                    if generation_ticks >= max_generation_ticks:
+                        break
+            # Update stats at the end of the generation
+            stats_tracker.update(games)
         time.sleep(0.001)
 
 # --------------------- Main Simulation ---------------------
@@ -359,7 +347,7 @@ def main():
     global speed_multiplier, training_paused
     pygame.init()
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    pygame.display.set_caption("Enhanced AI Snake Simulation")
+    pygame.display.set_caption("AI Snake Simulation with Generations")
     clock = pygame.time.Clock()
 
     games = [SnakeGame() for _ in range(NUM_AGENTS)]
@@ -458,7 +446,7 @@ def main():
         if show_nn:
             visualize_network(agents[selected_agent], screen.subsurface(stats_area))
         else:
-            stats_surface = stats_tracker.get_surface(stats_area.width, stats_area.height, games, agents)
+            stats_surface = stats_tracker.get_surface(stats_area.width, stats_area.height)
             screen.blit(stats_surface, stats_area)
 
         pygame.display.flip()
