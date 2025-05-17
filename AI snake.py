@@ -11,8 +11,8 @@ from collections import deque
 # --------------------- Constants ---------------------
 Max_Sim_Time = 100  # seconds
 
-GRID_SIZE = 10
-CELL_SIZE = 40
+GRID_SIZE = 12
+CELL_SIZE = 38
 SIM_WIDTH = GRID_SIZE * CELL_SIZE   # 400 pixels
 SIM_HEIGHT = GRID_SIZE * CELL_SIZE  # 400 pixels
 
