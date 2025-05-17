@@ -14,11 +14,12 @@ from concurrent.futures import ThreadPoolExecutor
 # --- Constants ---
 SCREEN_WIDTH = 1600
 SCREEN_HEIGHT = 900
-MOVE_SPEED = 1.0  # Player movement speed
-ROTATION_SPEED = 0.9  # Mouse sensitivity
-CHUNK_SIZE = 16  # Chunk size in blocks
+MOVE_SPEED = 0.9  # Player movement speed
+ROTATION_SPEED = 0.8 # Mouse sensitivity
+CHUNK_SIZE = 10  # Chunk size in blocks
 VIEW_DISTANCE = 16  # Render distance in chunks
 SEED = random.randint(0, 100000)  # Seed for procedural generation
+fov = 80
 
 # Global thread pool for asynchronous mesh generation.
 executor = ThreadPoolExecutor(max_workers=6)
@@ -202,7 +203,7 @@ class Chunk:
                         elif biome == "water":
                             self.blocks[(x, y, z)] = "water"
                         elif biome == "mountain":
-                            if random.random() < 0.5:  # 50% chance for sand on mountain surface
+                            if random.random() < 0.5:
                                 self.blocks[(x, y, z)] = "sand"
                             else:
                                 self.blocks[(x, y, z)] = "stone"
@@ -211,9 +212,14 @@ class Chunk:
                     tree_height = random.randint(4, 7)
                     for y in range(height + 1, height + tree_height):
                         self.blocks[(x, y, z)] = "log"
+                    # Precompute leaf bounds
+                    lx_min = max(x - 2, 0)
+                    lx_max = min(x + 3, CHUNK_SIZE)
+                    lz_min = max(z - 2, 0)
+                    lz_max = min(z + 3, CHUNK_SIZE)
                     for ly in range(height + tree_height - 2, height + tree_height + 1):
-                        for lx in range(max(x - 2, 0), min(x + 3, CHUNK_SIZE)):
-                            for lz in range(max(z - 2, 0), min(z + 3, CHUNK_SIZE)):
+                        for lx in range(lx_min, lx_max):
+                            for lz in range(lz_min, lz_max):
                                 if (lx, ly, lz) not in self.blocks:
                                     self.blocks[(lx, ly, lz)] = "leaves"
 
@@ -234,23 +240,31 @@ class Chunk:
                 data_list.extend([x + vx, y + vy, z + vz, tx, ty, norm[0], norm[1], norm[2]])
 
         for (x, y, z), block_type in blocks.items():
+            if block_type == "air":
+                continue  # Skip air blocks immediately
+
+            # Handle water blocks
             if block_type == "water":
                 if (x, y + 1, z) not in blocks:
                     add_face(x, y, z, "top", "water", water_data)
-            if block_type != "air":
                 for face_type, (dx, dy, dz) in self.FACE_DIRECTIONS:
                     neighbor = (x + dx, y + dy, z + dz)
                     neighbor_block = blocks.get(neighbor)
-                    if neighbor_block is None or (block_type != "water" and neighbor_block == "water") or \
-                       (block_type == "water" and neighbor_block != "water"):
-                        if block_type == "water":
-                            add_face(x, y, z, face_type, block_type, water_data)
-                        elif block_type == "leaves":
-                            add_face(x, y, z, face_type, block_type, leaves_data)
-                        elif block_type == "sand":
-                            add_face(x, y, z, face_type, block_type, sand_data)
-                        else:
-                            add_face(x, y, z, face_type, block_type, terrain_data)
+                    if neighbor_block is None or neighbor_block != "water":
+                        add_face(x, y, z, face_type, "water", water_data)
+                continue  # Move to next block after handling water
+
+            # Handle non-water blocks (grass, dirt, stone, log, leaves, sand)
+            for face_type, (dx, dy, dz) in self.FACE_DIRECTIONS:
+                neighbor = (x + dx, y + dy, z + dz)
+                neighbor_block = blocks.get(neighbor)
+                if neighbor_block is None or neighbor_block == "water":
+                    if block_type == "leaves":
+                        add_face(x, y, z, face_type, "leaves", leaves_data)
+                    elif block_type == "sand":
+                        add_face(x, y, z, face_type, "sand", sand_data)
+                    else:
+                        add_face(x, y, z, face_type, block_type, terrain_data)
 
         self.terrain_data = np.array(terrain_data, dtype=np.float32)
         self.water_data = np.array(water_data, dtype=np.float32)
@@ -398,74 +412,50 @@ class World:
         modelview_matrix = glGetDoublev(GL_MODELVIEW_MATRIX)
         planes = extract_frustum_planes(proj_matrix, modelview_matrix)
 
-        # Render terrain
-        glEnableClientState(GL_VERTEX_ARRAY)
-        glEnableClientState(GL_TEXTURE_COORD_ARRAY)
-        glEnableClientState(GL_NORMAL_ARRAY)
+        # Precompute visible chunks
+        visible_chunks = []
         for x in range(chunk_x - VIEW_DISTANCE, chunk_x + VIEW_DISTANCE + 1):
             for z in range(chunk_z - VIEW_DISTANCE, chunk_z + VIEW_DISTANCE + 1):
                 if is_chunk_in_frustum(x, z, planes):
                     chunk = self.get_chunk(x, z)
-                    glPushMatrix()
-                    glTranslatef(x * CHUNK_SIZE, 0, z * CHUNK_SIZE)
-                    chunk.render()
-                    glPopMatrix()
-        glDisableClientState(GL_VERTEX_ARRAY)
-        glDisableClientState(GL_TEXTURE_COORD_ARRAY)
-        glDisableClientState(GL_NORMAL_ARRAY)
+                    visible_chunks.append((x, z, chunk))
 
-        # Render sand
+        # Enable client states once for all rendering passes
         glEnableClientState(GL_VERTEX_ARRAY)
         glEnableClientState(GL_TEXTURE_COORD_ARRAY)
         glEnableClientState(GL_NORMAL_ARRAY)
-        for x in range(chunk_x - VIEW_DISTANCE, chunk_x + VIEW_DISTANCE + 1):
-            for z in range(chunk_z - VIEW_DISTANCE, chunk_z + VIEW_DISTANCE + 1):
-                if is_chunk_in_frustum(x, z, planes):
-                    chunk = self.get_chunk(x, z)
-                    glPushMatrix()
-                    glTranslatef(x * CHUNK_SIZE, 0, z * CHUNK_SIZE)
-                    chunk.render_sand()
-                    glPopMatrix()
-        glDisableClientState(GL_VERTEX_ARRAY)
-        glDisableClientState(GL_TEXTURE_COORD_ARRAY)
-        glDisableClientState(GL_NORMAL_ARRAY)
+
+        # Render opaque objects (terrain and sand)
+        for x, z, chunk in visible_chunks:
+            glPushMatrix()
+            glTranslatef(x * CHUNK_SIZE, 0, z * CHUNK_SIZE)
+            chunk.render()      # Terrain
+            chunk.render_sand() # Sand
+            glPopMatrix()
 
         # Render leaves with blending
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        glEnableClientState(GL_VERTEX_ARRAY)
-        glEnableClientState(GL_TEXTURE_COORD_ARRAY)
-        glEnableClientState(GL_NORMAL_ARRAY)
-        for x in range(chunk_x - VIEW_DISTANCE, chunk_x + VIEW_DISTANCE + 1):
-            for z in range(chunk_z - VIEW_DISTANCE, chunk_z + VIEW_DISTANCE + 1):
-                if is_chunk_in_frustum(x, z, planes):
-                    chunk = self.get_chunk(x, z)
-                    glPushMatrix()
-                    glTranslatef(x * CHUNK_SIZE, 0, z * CHUNK_SIZE)
-                    chunk.render_leaves()
-                    glPopMatrix()
-        glDisableClientState(GL_VERTEX_ARRAY)
-        glDisableClientState(GL_TEXTURE_COORD_ARRAY)
-        glDisableClientState(GL_NORMAL_ARRAY)
+        for x, z, chunk in visible_chunks:
+            glPushMatrix()
+            glTranslatef(x * CHUNK_SIZE, 0, z * CHUNK_SIZE)
+            chunk.render_leaves()
+            glPopMatrix()
 
         # Render water with blending
         glDepthMask(GL_FALSE)
-        glEnableClientState(GL_VERTEX_ARRAY)
-        glEnableClientState(GL_TEXTURE_COORD_ARRAY)
-        glEnableClientState(GL_NORMAL_ARRAY)
-        for x in range(chunk_x - VIEW_DISTANCE, chunk_x + VIEW_DISTANCE + 1):
-            for z in range(chunk_z - VIEW_DISTANCE, chunk_z + VIEW_DISTANCE + 1):
-                if is_chunk_in_frustum(x, z, planes):
-                    chunk = self.get_chunk(x, z)
-                    glPushMatrix()
-                    glTranslatef(x * CHUNK_SIZE, 0, z * CHUNK_SIZE)
-                    chunk.render_water()
-                    glPopMatrix()
+        for x, z, chunk in visible_chunks:
+            glPushMatrix()
+            glTranslatef(x * CHUNK_SIZE, 0, z * CHUNK_SIZE)
+            chunk.render_water()
+            glPopMatrix()
+        glDepthMask(GL_TRUE)
+        glDisable(GL_BLEND)
+
+        # Disable client states once at the end
         glDisableClientState(GL_VERTEX_ARRAY)
         glDisableClientState(GL_TEXTURE_COORD_ARRAY)
         glDisableClientState(GL_NORMAL_ARRAY)
-        glDepthMask(GL_TRUE)
-        glDisable(GL_BLEND)
 
     def unload_far_chunks(self, player_chunk_x, player_chunk_z, max_distance):
         keys_to_delete = []
@@ -563,62 +553,6 @@ def load_texture(filename):
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
     return texture_id
 
-# --- UI Helper Functions ---
-def draw_text(x, y, text, font, color=(255, 255, 255)):
-    text_surface = font.render(text, True, color)
-    text_data = pygame.image.tostring(text_surface, "RGBA", True)
-    glRasterPos2f(x, y)
-    glDrawPixels(text_surface.get_width(), text_surface.get_height(), GL_RGBA, GL_UNSIGNED_BYTE, text_data)
-
-def draw_menu(fov):
-    glMatrixMode(GL_PROJECTION)
-    glPushMatrix()
-    glLoadIdentity()
-    glOrtho(0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, -1, 1)
-    glMatrixMode(GL_MODELVIEW)
-    glPushMatrix()
-    glLoadIdentity()
-
-    glDisable(GL_DEPTH_TEST)
-    glDisable(GL_LIGHTING)
-
-    font = pygame.font.SysFont("Arial", 24)
-    draw_text(50, 50, "Main Menu", font)
-    draw_text(50, 80, "Settings", font)
-    draw_text(50, 110, f"FOV: {fov}", font)
-    draw_text(50, 140, "Press UP to increase, DOWN to decrease FOV", font)
-    draw_text(50, 170, "Press M to resume", font)
-
-    glEnable(GL_DEPTH_TEST)
-    glEnable(GL_LIGHTING)
-
-    glPopMatrix()
-    glMatrixMode(GL_PROJECTION)
-    glPopMatrix()
-    glMatrixMode(GL_MODELVIEW)
-
-def draw_fps(fps):
-    glMatrixMode(GL_PROJECTION)
-    glPushMatrix()
-    glLoadIdentity()
-    glOrtho(0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, -1, 1)
-    glMatrixMode(GL_MODELVIEW)
-    glPushMatrix()
-    glLoadIdentity()
-
-    glDisable(GL_DEPTH_TEST)
-    glDisable(GL_LIGHTING)
-
-    font = pygame.font.SysFont("Arial", 24)
-    draw_text(10, 10, f"FPS: {fps:.2f}", font)
-
-    glEnable(GL_DEPTH_TEST)
-    glEnable(GL_LIGHTING)
-
-    glPopMatrix()
-    glMatrixMode(GL_PROJECTION)
-    glPopMatrix()
-    glMatrixMode(GL_MODELVIEW)
 
 # --- Main Function ---
 def main():
@@ -641,9 +575,6 @@ def main():
     player = Player(0, get_height(0, 0) + 2, 0)
     clock = pygame.time.Clock()
 
-    fov = 80
-    show_menu = False
-    show_fps = False
 
     while True:
         for event in pygame.event.get():
@@ -654,19 +585,9 @@ def main():
                 if event.key == K_ESCAPE:
                     pygame.quit()
                     quit()
-                elif event.key == pygame.K_m:
-                    show_menu = not show_menu
-                elif event.key == pygame.K_f:
-                    show_fps = not show_fps
-                elif show_menu:
-                    if event.key == pygame.K_UP:
-                        fov = min(fov + 1, 120)
-                    elif event.key == pygame.K_DOWN:
-                        fov = max(fov - 1, 30)
 
-        if not show_menu:
-            player.update(world)
-            world.preload_chunks(player.x, player.z)
+        player.update(world)
+        world.preload_chunks(player.x, player.z)
 
         glClearColor(0.6, 0.8, 1.0, 1.0)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -743,11 +664,6 @@ def main():
         glDepthMask(GL_TRUE)
         glDisable(GL_BLEND)
         glDisable(GL_POLYGON_OFFSET_FILL)
-
-        if show_menu:
-            draw_menu(fov)
-        if show_fps:
-            draw_fps(clock.get_fps())
 
         pygame.display.flip()
         clock.tick(60)
