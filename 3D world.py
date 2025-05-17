@@ -1,1084 +1,563 @@
 import pygame
-from pygame.locals import DOUBLEBUF, OPENGL, QUIT, MOUSEBUTTONDOWN, MOUSEBUTTONUP, MOUSEMOTION, KEYDOWN, K_SPACE, K_UP, K_DOWN
-from pygame.locals import K_w, K_a, K_s, K_d, K_q, K_e, K_r, K_f, K_c, K_v, K_1, K_2, K_3, K_ESCAPE, K_LSHIFT
-from OpenGL.GL import *
-from OpenGL.GLU import *
+import pygame.locals as pl
+import sys
 import math
 import random
-import time
+import numpy as np
 
-# Global variables
-SCREEN_WIDTH, SCREEN_HEIGHT = 1024, 768
-DEBUG_MODE = False
+# Initialize Pygame
+pygame.init()
 
-class Aircraft:
+# Constants
+WIDTH, HEIGHT = 800, 600
+FOV = 70
+DRAW_DISTANCE = 2600
+FAR_DRAW_DISTANCE = 3000
+CHUNK_SIZE = 20
+TERRAIN_SCALE = 10
+SKY_COLOR = (135, 206, 250)
+MOVE_SPEED = 2.0
+ROTATION_SPEED = 0.03
+GRAVITY = 0.03
+ENGINE_FORCE = 0.2
+MAX_SPEED = 15.0
+DRAG_COEFFICIENT = 0.005
+CLOUD_COUNT = 80
+MOUNTAIN_COUNT = 40
+LOD_THRESHOLD = 1000
+NEAR_PLANE = 1.0  # Added to improve depth precision
+
+# Set up the display
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("3D Flight Simulator")
+clock = pygame.time.Clock()
+
+# Vector3D, Camera, Airplane, Cloud, Mountain classes unchanged
+class Vector3D:
+    def __init__(self, x=0, y=0, z=0):
+        self.x = x
+        self.y = y
+        self.z = z
+    
+    def __add__(self, other):
+        return Vector3D(self.x + other.x, self.y + other.y, self.z + other.z)
+    
+    def __sub__(self, other):
+        return Vector3D(self.x - other.x, self.y - other.y, self.z - other.z)
+    
+    def __mul__(self, scalar):
+        return Vector3D(self.x * scalar, self.y * scalar, self.z * scalar)
+    
+    def dot(self, other):
+        return self.x * other.x + self.y * other.y + self.z * other.z
+    
+    def magnitude(self):
+        return math.sqrt(self.x**2 + self.y**2 + self.z**2)
+    
+    def normalize(self):
+        mag = self.magnitude()
+        if mag == 0:
+            return Vector3D(0, 0, 0)
+        return Vector3D(self.x / mag, self.y / mag, self.z / mag)
+    
+    def cross(self, other):
+        return Vector3D(
+            self.y * other.z - self.z * other.y,
+            self.z * other.x - self.x * other.z,
+            self.x * other.y - self.y * other.x
+        )
+
+class Camera:
     def __init__(self):
-        self.position = [0, 3, 0]  # [x, y, z]
-        self.velocity = [0, 0, 0]  # [vx, vy, vz]
-        self.acceleration = [0, 0, 0]  # [ax, ay, az]
-        self.orientation = [0, 0, 0]  # [pitch, yaw, roll] in degrees
-        self.angular_velocity = [0, 0, 0]  # [pitch_rate, yaw_rate, roll_rate] in degrees/sec
-        
-        # Flight characteristics
-        self.max_speed = 0.5
-        self.thrust = 0.01
-        self.lift_coefficient = 0.005
-        self.drag_coefficient = 0.001
-        self.turn_rate = 1.0
-        self.pitch_rate = 0.8
-        self.roll_rate = 1.5
-        
-        # Control inputs
-        self.throttle = 0.0  # 0.0 to 1.0
-        self.pitch_input = 0.0  # -1.0 to 1.0
-        self.yaw_input = 0.0  # -1.0 to 1.0
-        self.roll_input = 0.0  # -1.0 to 1.0
-        
-        # Camera
-        self.camera_mode = 0  # 0: cockpit, 1: chase, 2: external
-        self.camera_distance = 5.0
-        self.camera_elevation = 1.0
-        
-    def update(self, dt):
-        # Apply throttle
-        forward_vector = self.get_forward_vector()
-        self.acceleration[0] = forward_vector[0] * self.throttle * self.thrust
-        self.acceleration[1] = forward_vector[1] * self.throttle * self.thrust
-        self.acceleration[2] = forward_vector[2] * self.throttle * self.thrust
-        
-        # Apply gravity
-        self.acceleration[1] -= 0.01
-        
-        # Apply lift (simplified)
-        speed = math.sqrt(sum(v*v for v in self.velocity))
-        if speed > 0.1:
-            up_vector = self.get_up_vector()
-            lift = speed * self.lift_coefficient
-            self.acceleration[0] += up_vector[0] * lift
-            self.acceleration[1] += up_vector[1] * lift
-            self.acceleration[2] += up_vector[2] * lift
-        
-        # Apply drag
-        if speed > 0:
-            drag = speed * speed * self.drag_coefficient
-            self.acceleration[0] -= self.velocity[0] * drag / speed
-            self.acceleration[1] -= self.velocity[1] * drag / speed
-            self.acceleration[2] -= self.velocity[2] * drag / speed
-        
-        # Update velocity
-        for i in range(3):
-            self.velocity[i] += self.acceleration[i] * dt
-        
-        # Limit speed
-        speed = math.sqrt(sum(v*v for v in self.velocity))
-        if speed > self.max_speed:
-            scale = self.max_speed / speed
-            for i in range(3):
-                self.velocity[i] *= scale
-        
-        # Update position
-        for i in range(3):
-            self.position[i] += self.velocity[i] * dt
-        
-        # Prevent crashing into the ground (improved collision)
-        if self.position[1] < 0.1:
-            self.position[1] = 0.1
-            self.velocity[1] = max(0, self.velocity[1])  # Stop downward movement
-            self.acceleration[1] = 0  # Reset vertical acceleration
-        
-        # Update orientation based on control inputs
-        self.orientation[0] += self.pitch_input * self.pitch_rate * dt * 60
-        self.orientation[1] += self.yaw_input * self.turn_rate * dt * 60
-        self.orientation[2] += self.roll_input * self.roll_rate * dt * 60
-        
-        # Normalize angles
-        self.orientation[0] = (self.orientation[0] + 180) % 360 - 180  # Pitch: -180 to 180
-        self.orientation[1] = self.orientation[1] % 360  # Yaw: 0 to 360
-        self.orientation[2] = (self.orientation[2] + 180) % 360 - 180  # Roll: -180 to 180
-        
-        # Reset acceleration
-        self.acceleration = [0, 0, 0]
+        self.position = Vector3D(0, 10, 0)
+        self.forward = Vector3D(0, 0, 1)
+        self.up = Vector3D(0, 1, 0)
+        self.right = Vector3D(1, 0, 0)
+        self.pitch = 0
+        self.yaw = 0
     
-    def get_forward_vector(self):
-        # Convert orientation to radians
-        pitch_rad = math.radians(self.orientation[0])
-        yaw_rad = math.radians(self.orientation[1])
-        
-        # Calculate forward direction
-        x = -math.sin(yaw_rad) * math.cos(pitch_rad)
-        y = math.sin(pitch_rad)
-        z = -math.cos(yaw_rad) * math.cos(pitch_rad)
-        
-        return [x, y, z]
+    def update_vectors(self):
+        self.forward.x = math.cos(self.yaw) * math.cos(self.pitch)
+        self.forward.y = math.sin(self.pitch)
+        self.forward.z = math.sin(self.yaw) * math.cos(self.pitch)
+        self.forward = self.forward.normalize()
+        self.right = self.forward.cross(Vector3D(0, 1, 0)).normalize()
+        self.up = self.right.cross(self.forward).normalize()
+
+class Airplane:
+    def __init__(self):
+        self.position = Vector3D(0, 100, 0)
+        self.velocity = Vector3D(0, 0, 0)
+        self.acceleration = Vector3D(0, 0, 0)
+        self.rotation = Vector3D(0, 0, 0)
+        self.forward = Vector3D(0, 0, 1)
+        self.up = Vector3D(0, 1, 0)
+        self.right = Vector3D(1, 0, 0)
+        self.speed = 0
+        self.throttle = 0.5
     
-    def get_up_vector(self):
-        # Convert orientation to radians
-        pitch_rad = math.radians(self.orientation[0])
-        yaw_rad = math.radians(self.orientation[1])
-        roll_rad = math.radians(self.orientation[2])
-        
-        # Calculate up direction
-        x = math.sin(roll_rad) * math.sin(yaw_rad) - math.cos(roll_rad) * math.sin(pitch_rad) * math.cos(yaw_rad)
-        y = math.cos(roll_rad) * math.cos(pitch_rad)
-        z = -math.sin(roll_rad) * math.cos(yaw_rad) - math.cos(roll_rad) * math.sin(pitch_rad) * math.sin(yaw_rad)
-        
-        return [x, y, z]
+    def update_vectors(self):
+        self.forward.x = math.cos(self.rotation.y) * math.cos(self.rotation.x)
+        self.forward.y = math.sin(self.rotation.x)
+        self.forward.z = math.sin(self.rotation.y) * math.cos(self.rotation.x)
+        self.forward = self.forward.normalize()
+        self.right = self.forward.cross(Vector3D(0, 1, 0)).normalize()
+        self.up = self.right.cross(self.forward).normalize()
     
-    def get_right_vector(self):
-        # Cross product of forward and up vectors
-        forward = self.get_forward_vector()
-        up = self.get_up_vector()
-        
-        right = [
-            up[1] * forward[2] - up[2] * forward[1],
-            up[2] * forward[0] - up[0] * forward[2],
-            up[0] * forward[1] - up[1] * forward[0]
-        ]
-        
-        # Normalize
-        magnitude = math.sqrt(sum(v*v for v in right))
-        if magnitude > 0:
-            right = [v / magnitude for v in right]
-        
-        return right
-    
-    def setup_camera(self):
-        # Set up the camera based on the aircraft position and orientation
-        glMatrixMode(GL_MODELVIEW)
-        glLoadIdentity()
-        
-        if self.camera_mode == 0:  # Cockpit view
-            # Calculate the camera position and target
-            forward = self.get_forward_vector()
-            up = self.get_up_vector()
-            
-            # Look from slightly above the aircraft
-            eye_offset = [0, 0.3, 0]  # Offset from the aircraft position
-            target_offset = [forward[0], forward[1], forward[2]]  # Look forward
-            
-            gluLookAt(
-                self.position[0] + eye_offset[0], self.position[1] + eye_offset[1], self.position[2] + eye_offset[2],
-                self.position[0] + target_offset[0], self.position[1] + target_offset[1], self.position[2] + target_offset[2],
-                up[0], up[1], up[2]
-            )
-        
-        elif self.camera_mode == 1:  # Chase view
-            # Calculate camera position behind the aircraft
-            forward = self.get_forward_vector()
-            up = self.get_up_vector()
-            
-            # Position the camera behind and above the aircraft
-            camera_pos = [
-                self.position[0] - forward[0] * self.camera_distance,
-                self.position[1] - forward[1] * self.camera_distance + self.camera_elevation,
-                self.position[2] - forward[2] * self.camera_distance
-            ]
-            
-            gluLookAt(
-                camera_pos[0], camera_pos[1], camera_pos[2],
-                self.position[0], self.position[1], self.position[2],
-                up[0], up[1], up[2]
-            )
-        
-        else:  # External view
-            # Orbit around the aircraft
-            time_offset = pygame.time.get_ticks() / 5000.0
-            orbit_radius = self.camera_distance * 2
-            orbit_height = self.camera_elevation * 2
-            
-            camera_pos = [
-                self.position[0] + orbit_radius * math.sin(time_offset),
-                self.position[1] + orbit_height,
-                self.position[2] + orbit_radius * math.cos(time_offset)
-            ]
-            
-            gluLookAt(
-                camera_pos[0], camera_pos[1], camera_pos[2],
-                self.position[0], self.position[1], self.position[2],
-                0, 1, 0
-            )
-    
-    def draw(self):
-        # Save the current matrix
-        glPushMatrix()
-        
-        # Position the aircraft
-        glTranslatef(self.position[0], self.position[1], self.position[2])
-        
-        # Rotate in order: yaw, pitch, roll
-        glRotatef(self.orientation[1], 0, 1, 0)  # Yaw
-        glRotatef(self.orientation[0], 1, 0, 0)  # Pitch
-        glRotatef(self.orientation[2], 0, 0, 1)  # Roll
-        
-        # Draw the aircraft body
-        glColor3f(0.7, 0.7, 0.7)
-        
-        # Fuselage
-        glPushMatrix()
-        glScalef(0.15, 0.1, 0.5)
-        draw_cube()
-        glPopMatrix()
-        
-        # Wings
-        glPushMatrix()
-        glTranslatef(0, 0, 0)
-        glScalef(0.6, 0.02, 0.2)
-        draw_cube()
-        glPopMatrix()
-        
-        # Tail
-        glPushMatrix()
-        glTranslatef(0, 0.1, -0.4)
-        glScalef(0.03, 0.15, 0.1)
-        draw_cube()
-        glPopMatrix()
-        
-        # Horizontal stabilizer
-        glPushMatrix()
-        glTranslatef(0, 0, -0.4)
-        glScalef(0.3, 0.02, 0.1)
-        draw_cube()
-        glPopMatrix()
-        
-        # Restore the matrix
-        glPopMatrix()
-        
-        # Draw contrails
-        self.draw_contrails()
-    
-    def draw_contrails(self):
-        # Draw contrails based on speed
-        speed = math.sqrt(sum(v*v for v in self.velocity))
-        if speed > 0.2:
-            glPushMatrix()
-            glDisable(GL_LIGHTING)
-            glEnable(GL_BLEND)
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-            
-            glBegin(GL_LINES)
-            glColor4f(1, 1, 1, 0.5)
-            
-            # Left wing contrail
-            glVertex3f(self.position[0] - 0.3, self.position[1], self.position[2])
-            backward = [-v for v in self.get_forward_vector()]
-            glVertex3f(
-                self.position[0] - 0.3 + backward[0] * speed * 2,
-                self.position[1] + backward[1] * speed * 2,
-                self.position[2] + backward[2] * speed * 2
-            )
-            
-            # Right wing contrail
-            glVertex3f(self.position[0] + 0.3, self.position[1], self.position[2])
-            glVertex3f(
-                self.position[0] + 0.3 + backward[0] * speed * 2,
-                self.position[1] + backward[1] * speed * 2,
-                self.position[2] + backward[2] * speed * 2
-            )
-            
-            glEnd()
-            
-            glDisable(GL_BLEND)
-            glEnable(GL_LIGHTING)
-            glPopMatrix()
+    def apply_physics(self):
+        self.acceleration.y -= GRAVITY
+        engine_force = self.forward * (self.throttle * ENGINE_FORCE)
+        self.acceleration += engine_force
+        speed = self.velocity.magnitude()
+        if speed > 0.001:
+            drag_force = DRAG_COEFFICIENT * speed * speed
+            drag_direction = self.velocity * (-1 / speed)
+            self.acceleration += drag_direction * drag_force
+        self.velocity += self.acceleration
+        if self.velocity.magnitude() > MAX_SPEED:
+            self.velocity = self.velocity.normalize() * MAX_SPEED
+        self.position += self.velocity
+        self.acceleration = Vector3D(0, 0, 0)
+        if self.position.y < 5:
+            self.position.y = 5
+            self.velocity.y = max(0, self.velocity.y)
 
 class Cloud:
-    def __init__(self, position, size):
-        self.position = position
-        self.size = size
-        self.texture_offset = random.uniform(0, 1)
-    
-    def draw(self):
-        glPushMatrix()
-        glTranslatef(self.position[0], self.position[1], self.position[2])
-        
-        # Draw cloud as a semi-transparent billboarded quad
-        modelview = glGetDoublev(GL_MODELVIEW_MATRIX)
-        right = [modelview[0,0], modelview[1,0], modelview[2,0]]  # First column
-        up = [modelview[0,1], modelview[1,1], modelview[2,1]]     # Second column
-        
-        half_size = self.size / 2
-        glBegin(GL_QUADS)
-        glTexCoord2f(0, 0)
-        glVertex3f(-half_size * right[0] - half_size * up[0], 
-                   -half_size * right[1] - half_size * up[1], 
-                   -half_size * right[2] - half_size * up[2])
-        glTexCoord2f(1, 0)
-        glVertex3f(half_size * right[0] - half_size * up[0], 
-                   half_size * right[1] - half_size * up[1], 
-                   half_size * right[2] - half_size * up[2])
-        glTexCoord2f(1, 1)
-        glVertex3f(half_size * right[0] + half_size * up[0], 
-                   half_size * right[1] + half_size * up[1], 
-                   half_size * right[2] + half_size * up[2])
-        glTexCoord2f(0, 1)
-        glVertex3f(-half_size * right[0] + half_size * up[0], 
-                   -half_size * right[1] + half_size * up[1], 
-                   -half_size * right[2] + half_size * up[2])
-        glEnd()
-        
-        glPopMatrix()
-
-class Building:
-    def __init__(self, position, width, height, depth):
-        self.position = position
-        self.width = width
-        self.height = height
-        self.depth = depth
-        self.color = (
-            random.uniform(0.4, 0.8),
-            random.uniform(0.4, 0.8),
-            random.uniform(0.4, 0.8)
+    def __init__(self):
+        self.position = Vector3D(
+            random.uniform(-FAR_DRAW_DISTANCE, FAR_DRAW_DISTANCE),
+            random.uniform(100, 400),
+            random.uniform(-FAR_DRAW_DISTANCE, FAR_DRAW_DISTANCE)
         )
-        self.has_windows = random.choice([True, False])
-        
-    def draw(self):
-        glPushMatrix()
-        glTranslatef(self.position[0], self.position[1], self.position[2])
-        
-        # Main building body
-        glColor3f(*self.color)
-        glPushMatrix()
-        glScalef(self.width, self.height, self.depth)
-        draw_cube()
-        glPopMatrix()
-        
-        # Draw windows if applicable
-        if self.has_windows:
-            glColor3f(0.9, 0.9, 0.4)  # Yellow window light
-            window_size = min(self.width, self.depth) * 0.15
-            window_depth = 0.01
-            
-            # Front windows
-            for x in range(int(self.width / window_size) - 1):
-                for y in range(int(self.height / window_size) - 1):
-                    if random.random() < 0.7:  # Some windows are dark
-                        glPushMatrix()
-                        glTranslatef(
-                            (x + 1) * window_size - self.width/2 + window_size/2,
-                            (y + 1) * window_size - self.height/2 + window_size*2,
-                            self.depth/2 + window_depth/2
-                        )
-                        glScalef(window_size * 0.7, window_size * 0.7, window_depth)
-                        draw_cube()
-                        glPopMatrix()
-            
-            # Back windows
-            for x in range(int(self.width / window_size) - 1):
-                for y in range(int(self.height / window_size) - 1):
-                    if random.random() < 0.7:  # Some windows are dark
-                        glPushMatrix()
-                        glTranslatef(
-                            (x + 1) * window_size - self.width/2 + window_size/2,
-                            (y + 1) * window_size - self.height/2 + window_size*2,
-                            -self.depth/2 - window_depth/2
-                        )
-                        glScalef(window_size * 0.7, window_size * 0.7, window_depth)
-                        draw_cube()
-                        glPopMatrix()
-        
-        glPopMatrix()
+        self.size = random.uniform(25, 70)
+        self.velocity = Vector3D(random.uniform(-0.5, 0.5), 0, random.uniform(-0.5, 0.5))
+    
+    def update(self):
+        self.position += self.velocity
+        wrap_size = FAR_DRAW_DISTANCE
+        if self.position.x < -wrap_size:
+            self.position.x += 2 * wrap_size
+        elif self.position.x > wrap_size:
+            self.position.x -= 2 * wrap_size
+        if self.position.z < -wrap_size:
+            self.position.z += 2 * wrap_size
+        elif self.position.z > wrap_size:
+            self.position.z -= 2 * wrap_size
 
-def generate_earth_texture():
-    """Generate a 512x256 surface with a procedural 'Earth-like' texture."""
-    size_x, size_y = 512, 256
-    surface = pygame.Surface((size_x, size_y), pygame.SRCALPHA)
-    surface.fill((0, 64, 128))  # deep blue
-    
-    # Create a grid for the land/water
-    grid_size = 64
-    noise_scale = 0.2
-    
-    # Generate continents
-    for x in range(size_x):
-        for y in range(size_y):
-            # Create Perlin-like noise
-            nx = x / size_x - 0.5
-            ny = y / size_y - 0.5
-            
-            # Simple noise function
-            noise = math.sin(nx * 5) * math.cos(ny * 3) + math.sin(nx * 13) * math.cos(ny * 7)
-            
-            # Add latitude-based coloring (colder at poles)
-            latitude_factor = abs(y - size_y/2) / (size_y/2)
-            
-            if noise > 0:
-                # Land
-                green = max(0, min(255, 100 - latitude_factor * 60))
-                brown = max(0, min(255, 70 + latitude_factor * 50))
-                surface.set_at((x, y), (brown, green, 0))
-                
-                # Add snow at the poles
-                if latitude_factor > 0.7:
-                    snow_amount = (latitude_factor - 0.7) / 0.3
-                    white_amount = int(snow_amount * 255)
-                    current = surface.get_at((x, y))
-                    surface.set_at((x, y), (
-                        int(current[0] * (1 - snow_amount) + white_amount),
-                        int(current[1] * (1 - snow_amount) + white_amount),
-                        int(current[2] * (1 - snow_amount) + white_amount)
-                    ))
-            else:
-                # Water
-                blue = max(0, min(255, 150 - latitude_factor * 50))
-                surface.set_at((x, y), (0, 64, blue))
-    
-    # Add some coastal details
-    for x in range(1, size_x-1):
-        for y in range(1, size_y-1):
-            current = surface.get_at((x, y))
-            if current[2] > 100:  # If water
-                # Check if there's land nearby
-                has_land = False
-                for dx in [-1, 0, 1]:
-                    for dy in [-1, 0, 1]:
-                        if dx == 0 and dy == 0:
-                            continue
-                        neighbor = surface.get_at((x+dx, y+dy))
-                        if neighbor[2] < 50:  # Land is detected
-                            has_land = True
-                
-                # If it's a coastal cell, make it lighter blue
-                if has_land:
-                    surface.set_at((x, y), (0, 100, 180))
-    
-    return surface
+class Mountain:
+    def __init__(self):
+        self.position = Vector3D(
+            random.uniform(-FAR_DRAW_DISTANCE, FAR_DRAW_DISTANCE),
+            0,
+            random.uniform(-FAR_DRAW_DISTANCE, FAR_DRAW_DISTANCE)
+        )
+        self.height = random.uniform(50, 250)
+        self.radius = random.uniform(50, 140)
+        self.color = (
+            random.randint(100, 139),
+            random.randint(60, 90),
+            random.randint(30, 60)
+        )
 
-def generate_cloud_texture():
-    """Generate a cloud texture."""
-    size = 256
-    surface = pygame.Surface((size, size), pygame.SRCALPHA)
-    surface.fill((0, 0, 0, 0))  # Transparent
+class Ground:
+    def __init__(self):
+        self.chunk_size = CHUNK_SIZE
+        self.scale = TERRAIN_SCALE
+        self.chunks = {}
+        self.height_cache = {}
     
-    # Draw cloud formations
-    for _ in range(15):
-        x = random.randint(0, size)
-        y = random.randint(0, size)
-        radius = random.randint(20, 60)
+    def get_height(self, x, z):
+        key = (int(x), int(z))
+        if key not in self.height_cache:
+            height = 0
+            for i in range(2):
+                freq = 0.01 * (2 ** i)
+                amp = 10 / (2 ** i)
+                height += amp * math.sin(x * freq + i) * math.cos(z * freq + i)
+            self.height_cache[key] = height
+        return self.height_cache[key]
+    
+    def get_terrain_color(self, height):
+        if height < -2:
+            return (65, 105, 225)
+        elif height < 0:
+            return (210, 180, 140)
+        elif height < 3:
+            return (34, 139, 34)
+        else:
+            return (139, 69, 19)
+    
+    def generate_chunk(self, chunk_x, chunk_z, lod=1):
+        quads = []
+        step_size = 5 * lod
+        chunk_heights = {}
+        # Ensure edge vertices align across chunks
+        for x in range(chunk_x * self.chunk_size, (chunk_x + 1) * self.chunk_size + step_size, step_size):
+            for z in range(chunk_z * self.chunk_size, (chunk_z + 1) * self.chunk_size + step_size, step_size):
+                chunk_heights[(x, z)] = self.get_height(x, z)
+        for x in range(chunk_x * self.chunk_size, (chunk_x + 1) * self.chunk_size, step_size):
+            for z in range(chunk_z * self.chunk_size, (chunk_z + 1) * self.chunk_size, step_size):
+                p1 = (x, chunk_heights[(x, z)], z)
+                p2 = (x + step_size, chunk_heights.get((x + step_size, z), self.get_height(x + step_size, z)), z)
+                p3 = (x + step_size, chunk_heights.get((x + step_size, z + step_size), self.get_height(x + step_size, z + step_size)), z + step_size)
+                p4 = (x, chunk_heights.get((x, z + step_size), self.get_height(x, z + step_size)), z + step_size)
+                p1 = (p1[0] * self.scale, p1[1] + 0.01 * (chunk_x + chunk_z), p1[2] * self.scale)
+                p2 = (p2[0] * self.scale, p2[1] + 0.01 * (chunk_x + chunk_z), p2[2] * self.scale)
+                p3 = (p3[0] * self.scale, p3[1] + 0.01 * (chunk_x + chunk_z), p3[2] * self.scale)
+                p4 = (p4[0] * self.scale, p4[1] + 0.01 * (chunk_x + chunk_z), p4[2] * self.scale)
+                avg_height = (p1[1] + p2[1] + p3[1] + p4[1]) / 4
+                color = self.get_terrain_color(avg_height)
+                quads.append((p1, p2, p3, p4, color))
+        return quads
+    
+    def get_height_at_position(self, x, z):
+        grid_x = x / self.scale
+        grid_z = z / self.scale
+        x1 = int(grid_x)
+        z1 = int(grid_z)
+        x2 = x1 + 1
+        z2 = z1 + 1
+        h1 = self.get_height(x1, z1)
+        h2 = self.get_height(x2, z1)
+        h3 = self.get_height(x2, z2)
+        h4 = self.get_height(x1, z2)
+        fx = grid_x - x1
+        fz = grid_z - z1
+        h12 = h1 * (1 - fx) + h2 * fx
+        h34 = h4 * (1 - fx) + h3 * fx
+        return h12 * (1 - fz) + h34 * fz
+
+class Renderer:
+    def __init__(self):
+        self.width = WIDTH
+        self.height = HEIGHT
+        self.aspect_ratio = self.width / self.height
+        self.fov_rad = math.radians(FOV)
+        self.draw_distance = DRAW_DISTANCE
+        self.far_draw_distance = FAR_DRAW_DISTANCE
+        self.near_plane = NEAR_PLANE
+    
+    def project_point(self, camera, point):
+        point_vec = Vector3D(point[0], point[1], point[2])
+        camera_to_point = point_vec - camera.position
+        forward_proj = camera_to_point.dot(camera.forward)
+        right_proj = camera_to_point.dot(camera.right)
+        up_proj = camera_to_point.dot(camera.up)
+        if forward_proj <= self.near_plane or forward_proj > self.far_draw_distance:
+            return None
+        fov_adjustment = math.tan(self.fov_rad / 2)
+        x = (right_proj / forward_proj) / fov_adjustment
+        y = (up_proj / forward_proj) / fov_adjustment / self.aspect_ratio
+        screen_x = int((x + 1) * self.width / 2)
+        screen_y = int((1 - y) * self.height / 2)
+        return (screen_x, screen_y, forward_proj)
+    
+    def draw_ground(self, camera, ground, airplane_position):
+        projected_quads = []
+        chunk_radius = int(self.draw_distance / (ground.chunk_size * ground.scale)) + 2  # Extra buffer
+        center_chunk_x = int(airplane_position.x / (ground.chunk_size * ground.scale))
+        center_chunk_z = int(airplane_position.z / (ground.chunk_size * ground.scale))
         
-        # Draw a soft, circular cloud puff
-        for dx in range(-radius, radius+1):
-            for dy in range(-radius, radius+1):
-                dist = math.sqrt(dx*dx + dy*dy)
-                if dist > radius:
+        for cx in range(center_chunk_x - chunk_radius, center_chunk_x + chunk_radius + 1):
+            for cz in range(center_chunk_z - chunk_radius, center_chunk_z + chunk_radius + 1):
+                chunk_center_x = (cx + 0.5) * ground.chunk_size * ground.scale
+                chunk_center_z = (cz + 0.5) * ground.chunk_size * ground.scale
+                dist = math.sqrt(
+                    (chunk_center_x - airplane_position.x) ** 2 +
+                    (chunk_center_z - airplane_position.z) ** 2
+                )
+                if dist > self.far_draw_distance:
                     continue
-                
-                px, py = x + dx, y + dy
-                if 0 <= px < size and 0 <= py < size:
-                    alpha = int(255 * (1 - dist/radius))
-                    current = surface.get_at((px, py))
-                    new_alpha = min(255, current[3] + alpha)
-                    surface.set_at((px, py), (255, 255, 255, new_alpha))
-    
-    return surface
-
-def load_texture_from_surface(surface):
-    """Load a PyGame surface as an OpenGL texture."""
-    textureData = pygame.image.tostring(surface, "RGBA", True)
-    width, height = surface.get_size()
-    texID = glGenTextures(1)
-    glBindTexture(GL_TEXTURE_2D, texID)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, textureData)
-    return texID
-
-def draw_cube():
-    """Draw a unit cube centered at the origin."""
-    vertices = [
-        # Front face
-        (-0.5, -0.5, 0.5), (0.5, -0.5, 0.5), (0.5, 0.5, 0.5), (-0.5, 0.5, 0.5),
-        # Back face
-        (-0.5, -0.5, -0.5), (-0.5, 0.5, -0.5), (0.5, 0.5, -0.5), (0.5, -0.5, -0.5),
-        # Top face
-        (-0.5, 0.5, -0.5), (-0.5, 0.5, 0.5), (0.5, 0.5, 0.5), (0.5, 0.5, -0.5),
-        # Bottom face
-        (-0.5, -0.5, -0.5), (0.5, -0.5, -0.5), (0.5, -0.5, 0.5), (-0.5, -0.5, 0.5),
-        # Right face
-        (0.5, -0.5, -0.5), (0.5, 0.5, -0.5), (0.5, 0.5, 0.5), (0.5, -0.5, 0.5),
-        # Left face
-        (-0.5, -0.5, -0.5), (-0.5, -0.5, 0.5), (-0.5, 0.5, 0.5), (-0.5, 0.5, -0.5)
-    ]
-    
-    normals = [
-        (0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1),  # Front
-        (0, 0, -1), (0, 0, -1), (0, 0, -1), (0, 0, -1),  # Back
-        (0, 1, 0), (0, 1, 0), (0, 1, 0), (0, 1, 0),  # Top
-        (0, -1, 0), (0, -1, 0), (0, -1, 0), (0, -1, 0),  # Bottom
-        (1, 0, 0), (1, 0, 0), (1, 0, 0), (1, 0, 0),  # Right
-        (-1, 0, 0), (-1, 0, 0), (-1, 0, 0), (-1, 0, 0)  # Left
-    ]
-    
-    texcoords = [
-        (0, 0), (1, 0), (1, 1), (0, 1),  # Front
-        (1, 0), (1, 1), (0, 1), (0, 0),  # Back
-        (0, 1), (0, 0), (1, 0), (1, 1),  # Top
-        (1, 1), (0, 1), (0, 0), (1, 0),  # Bottom
-        (1, 0), (1, 1), (0, 1), (0, 0),  # Right
-        (0, 0), (1, 0), (1, 1), (0, 1)   # Left
-    ]
-    
-    indices = [
-        0, 1, 2, 2, 3, 0,  # Front
-        4, 5, 6, 6, 7, 4,  # Back
-        8, 9, 10, 10, 11, 8,  # Top
-        12, 13, 14, 14, 15, 12,  # Bottom
-        16, 17, 18, 18, 19, 16,  # Right
-        20, 21, 22, 22, 23, 20   # Left
-    ]
-    
-    glBegin(GL_TRIANGLES)
-    for i in indices:
-        glNormal3fv(normals[i])
-        glTexCoord2fv(texcoords[i])
-        glVertex3fv(vertices[i])
-    glEnd()
-
-def draw_earth(texture_id, position=[0, 0, 0], scale=1.0):
-    """Draw the Earth as a textured sphere."""
-    glPushMatrix()
-    glTranslatef(position[0], position[1], position[2])
-    glRotatef(90, 1, 0, 0)  # Orient poles along Y axis
-    
-    glBindTexture(GL_TEXTURE_2D, texture_id)
-    
-    # Draw Earth sphere
-    glColor3f(1, 1, 1)
-    quadric = gluNewQuadric()
-    gluQuadricTexture(quadric, GL_TRUE)
-    gluSphere(quadric, scale, 50, 50)
-    gluDeleteQuadric(quadric)
-    
-    glPopMatrix()
-
-def draw_sky(radius=100):
-    """Draw a simple sky dome."""
-    glPushMatrix()
-    glDisable(GL_LIGHTING)
-    
-    # Sky gradient from bottom to top
-    glBegin(GL_TRIANGLE_FAN)
-    glColor3f(0.4, 0.7, 1.0)  # Zenith color (light blue)
-    glVertex3f(0, radius, 0)  # Top vertex
-    
-    # Circle of vertices at the horizon
-    steps = 32
-    for i in range(steps + 1):
-        angle = 2 * math.pi * i / steps
-        x = radius * math.cos(angle)
-        z = radius * math.sin(angle)
-        glColor3f(0.7, 0.8, 0.9)  # Horizon color
-        glVertex3f(x, 0, z)
-    
-    glEnd()
-    
-    glEnable(GL_LIGHTING)
-    glPopMatrix()
-
-def draw_runway(length=15, width=1.5, position=[0, 0, 0]):
-    """Draw a simple runway."""
-    glPushMatrix()
-    glTranslatef(position[0], position[1], position[2])
-    
-    # Main runway surface
-    glColor3f(0.3, 0.3, 0.3)  # Dark gray
-    glBegin(GL_QUADS)
-    glVertex3f(-width/2, 0.01, -length/2)
-    glVertex3f(width/2, 0.01, -length/2)
-    glVertex3f(width/2, 0.01, length/2)
-    glVertex3f(-width/2, 0.01, length/2)
-    glEnd()
-    
-    # Runway center markings
-    glColor3f(1, 1, 1)  # White
-    center_width = 0.2
-    for i in range(10):
-        marker_length = 0.8
-        z_pos = -length/2 + length * i / 10 + length/20
+                chunk_key = (cx, cz)
+                lod = 1 if dist < LOD_THRESHOLD else 4
+                if chunk_key not in ground.chunks:
+                    ground.chunks[chunk_key] = ground.generate_chunk(cx, cz, lod)
+                chunk_quads = ground.chunks[chunk_key]
+                for i in range(0, len(chunk_quads), 4):
+                    for quad in chunk_quads[i:i+4]:
+                        center_x = (quad[0][0] + quad[1][0] + quad[2][0] + quad[3][0]) / 4
+                        center_y = (quad[0][1] + quad[1][1] + quad[2][1] + quad[3][1]) / 4
+                        center_z = (quad[0][2] + quad[1][2] + quad[2][2] + quad[3][2]) / 4
+                        projected_center = self.project_point(camera, (center_x, center_y, center_z))
+                        if not projected_center:
+                            continue
+                        p1 = self.project_point(camera, quad[0])
+                        p2 = self.project_point(camera, quad[1])
+                        p3 = self.project_point(camera, quad[2])
+                        p4 = self.project_point(camera, quad[3])
+                        if p1 and p2 and p3 and p4:
+                            if all(
+                                p[0] < -self.width or p[0] >= 2 * self.width or
+                                p[1] < -self.height or p[1] >= 2 * self.height
+                                for p in [p1, p2, p3, p4]
+                            ):
+                                continue
+                            t = max(0, (projected_center[2] - self.draw_distance) / 
+                                    (self.far_draw_distance - self.draw_distance))
+                            faded_color = (
+                                int(quad[4][0] + t * (SKY_COLOR[0] - quad[4][0])),
+                                int(quad[4][1] + t * (SKY_COLOR[1] - quad[4][1])),
+                                int(quad[4][2] + t * (SKY_COLOR[2] - quad[4][2]))
+                            )
+                            projected_quads.append((
+                                [p1[0], p1[1]], [p2[0], p2[1]], 
+                                [p3[0], p3[1]], [p4[0], p4[1]], 
+                                faded_color, projected_center[2]
+                            ))
         
-        glBegin(GL_QUADS)
-        glVertex3f(-center_width/2, 0.02, z_pos)
-        glVertex3f(center_width/2, 0.02, z_pos)
-        glVertex3f(center_width/2, 0.02, z_pos + marker_length)
-        glVertex3f(-center_width/2, 0.02, z_pos)
-        glVertex3f(center_width/2, 0.02, z_pos)
-        glVertex3f(center_width/2, 0.02, z_pos + marker_length)
-        glVertex3f(-center_width/2, 0.02, z_pos + marker_length)
-        glEnd()
-    
-    # Runway edge markings
-    for i in range(2):
-        edge_pos = width/2 - 0.1 if i == 0 else -width/2 + 0.1
+        # Unload distant chunks with buffer
+        chunks_to_remove = []
+        for chunk_key in ground.chunks:
+            cx, cz = chunk_key
+            dist = math.sqrt(
+                ((cx + 0.5) * ground.chunk_size * ground.scale - airplane_position.x) ** 2 +
+                ((cz + 0.5) * ground.chunk_size * ground.scale - airplane_position.z) ** 2
+            )
+            if dist > self.draw_distance + 2 * ground.chunk_size * ground.scale:
+                chunks_to_remove.append(chunk_key)
+        for chunk_key in chunks_to_remove:
+            del ground.chunks[chunk_key]
         
-        glBegin(GL_QUADS)
-        glVertex3f(edge_pos - 0.05, 0.02, -length/2)
-        glVertex3f(edge_pos + 0.05, 0.02, -length/2)
-        glVertex3f(edge_pos + 0.05, 0.02, length/2)
-        glVertex3f(edge_pos - 0.05, 0.02, length/2)
-        glEnd()
+        projected_quads.sort(key=lambda x: -x[5])
+        for p1, p2, p3, p4, color, _ in projected_quads:
+            pygame.draw.polygon(screen, color, [p1, p2, p3, p4])
     
-    glPopMatrix()
-
-def draw_hud(screen, aircraft, fps):
-    """Draw a heads-up display with flight information."""
-    font = pygame.font.Font(None, 24)
+    def draw_clouds(self, camera, clouds):
+        projected_clouds = []
+        for cloud in clouds:
+            dist_to_camera = math.sqrt(
+                (cloud.position.x - camera.position.x) ** 2 +
+                (cloud.position.y - camera.position.y) ** 2 +
+                (cloud.position.z - camera.position.z) ** 2
+            )
+            if dist_to_camera > self.far_draw_distance:
+                continue
+            projected = self.project_point(camera, (cloud.position.x, cloud.position.y, cloud.position.z))
+            if projected:
+                size = int(cloud.size * 600 / max(1, projected[2]))
+                if size > 0:
+                    t = max(0, (dist_to_camera - self.draw_distance) / 
+                            (self.far_draw_distance - self.draw_distance))
+                    color = (
+                        int(255 + t * (SKY_COLOR[0] - 255)),
+                        int(255 + t * (SKY_COLOR[1] - 255)),
+                        int(255 + t * (SKY_COLOR[2] - 255))
+                    )
+                    projected_clouds.append((projected[0], projected[1], size, dist_to_camera))
+        projected_clouds.sort(key=lambda x: -x[3])
+        for x, y, size, dist in projected_clouds:
+            pygame.draw.circle(screen, color, (x, y), size)
     
-    # Calculate actual speed in km/h for display
-    speed_kmh = math.sqrt(sum(v*v for v in aircraft.velocity)) * 500
-    altitude = aircraft.position[1] * 1000  # Scale for display
+    def draw_mountains(self, camera, mountains):
+        projected_mountains = []
+        for mountain in mountains:
+            dist_to_camera = math.sqrt(
+                (mountain.position.x - camera.position.x) ** 2 +
+                (mountain.position.y - camera.position.y) ** 2 +
+                (mountain.position.z - camera.position.z) ** 2
+            )
+            if dist_to_camera > self.far_draw_distance:
+                continue
+            projected_base = self.project_point(camera, (mountain.position.x, 0, mountain.position.z))
+            if not projected_base:
+                continue
+            projected_peak = self.project_point(camera, (mountain.position.x, mountain.height, mountain.position.z))
+            if projected_peak:
+                base_radius = int(mountain.radius * 600 / max(1, projected_base[2]))
+                if base_radius > 0:
+                    t = max(0, (dist_to_camera - self.draw_distance) / 
+                            (self.far_draw_distance - self.draw_distance))
+                    color = (
+                        int(mountain.color[0] + t * (SKY_COLOR[0] - mountain.color[0])),
+                        int(mountain.color[1] + t * (SKY_COLOR[1] - mountain.color[1])),
+                        int(mountain.color[2] + t * (SKY_COLOR[2] - mountain.color[2]))
+                    )
+                    projected_mountains.append((
+                        projected_base[0], projected_base[1], 
+                        projected_peak[0], projected_peak[1],
+                        base_radius, color, dist_to_camera
+                    ))
+        projected_mountains.sort(key=lambda x: -x[6])
+        for base_x, base_y, peak_x, peak_y, base_radius, color, _ in projected_mountains:
+            pygame.draw.polygon(screen, color, [
+                (base_x - base_radius, base_y),
+                (peak_x, peak_y),
+                (base_x + base_radius, base_y)
+            ])
     
-    # FPS counter
-    fps_text = font.render(f"FPS: {fps:.1f}", True, (255, 255, 255))
-    screen.blit(fps_text, (10, 10))
+    def draw_airplane(self, camera, airplane):
+        nose = airplane.position + airplane.forward * 10
+        tail = airplane.position - airplane.forward * 10
+        left_wing_tip = airplane.position - airplane.right * 15
+        right_wing_tip = airplane.position + airplane.right * 15
+        left_stabilizer = tail - airplane.right * 5
+        right_stabilizer = tail + airplane.right * 5
+        vertical_stabilizer = tail + airplane.up * 5
+        proj_nose = self.project_point(camera, (nose.x, nose.y, nose.z))
+        proj_tail = self.project_point(camera, (tail.x, tail.y, tail.z))
+        proj_left_wing = self.project_point(camera, (left_wing_tip.x, left_wing_tip.y, left_wing_tip.z))
+        proj_right_wing = self.project_point(camera, (right_wing_tip.x, right_wing_tip.y, right_wing_tip.z))
+        proj_left_stab = self.project_point(camera, (left_stabilizer.x, left_stabilizer.y, left_stabilizer.z))
+        proj_right_stab = self.project_point(camera, (right_stabilizer.x, right_stabilizer.y, right_stabilizer.z))
+        proj_vert_stab = self.project_point(camera, (vertical_stabilizer.x, vertical_stabilizer.y, vertical_stabilizer.z))
+        if proj_nose and proj_tail:
+            pygame.draw.line(screen, (220, 220, 220), (proj_nose[0], proj_nose[1]), (proj_tail[0], proj_tail[1]), 4)
+            if proj_left_wing and proj_right_wing:
+                pygame.draw.line(screen, (200, 200, 200), (proj_left_wing[0], proj_left_wing[1]), 
+                                (proj_right_wing[0], proj_right_wing[1]), 3)
+                pygame.draw.line(screen, (200, 200, 200), (proj_nose[0], proj_nose[1]), 
+                                (proj_left_wing[0], proj_left_wing[1]), 2)
+                pygame.draw.line(screen, (200, 200, 200), (proj_nose[0], proj_nose[1]), 
+                                (proj_right_wing[0], proj_right_wing[1]), 2)
+            if proj_left_stab and proj_right_stab and proj_vert_stab:
+                pygame.draw.line(screen, (180, 180, 180), (proj_left_stab[0], proj_left_stab[1]), 
+                                (proj_right_stab[0], proj_right_stab[1]), 2)
+                pygame.draw.line(screen, (180, 180, 180), (proj_tail[0], proj_tail[1]), 
+                                (proj_vert_stab[0], proj_vert_stab[1]), 2)
     
-    # Flight information
-    info_texts = [
-        f"Speed: {speed_kmh:.1f} km/h",
-        f"Altitude: {altitude:.1f} m",
-        f"Pitch: {aircraft.orientation[0]:.1f}°",
-        f"Heading: {aircraft.orientation[1]:.1f}°",
-        f"Roll: {aircraft.orientation[2]:.1f}°",
-        f"Throttle: {aircraft.throttle*100:.0f}%",
-        f"Camera: {'Cockpit' if aircraft.camera_mode == 0 else 'Chase' if aircraft.camera_mode == 1 else 'External'}"
-    ]
-    
-    y_offset = 40
-    for text in info_texts:
-        rendered_text = font.render(text, True, (255, 255, 255))
-        screen.blit(rendered_text, (10, y_offset))
-        y_offset += 25
-    
-    # Draw artificial horizon in cockpit view
-    if aircraft.camera_mode == 0:
-        center_x, center_y = screen.get_width() // 2, screen.get_height() // 2
-        horizon_size = 150
-        
-        # Horizon line adjusted for pitch and roll
-        pitch_offset = aircraft.orientation[0] * 2  # 2 pixels per degree
-        roll_rad = math.radians(aircraft.orientation[2])
-        
-        # Draw background (sky/ground)
-        pygame.draw.circle(screen, (0, 0, 0), (center_x, center_y), horizon_size + 5)
-        
-        # Calculate horizon line endpoints
-        dx = math.cos(roll_rad + math.pi/2) * horizon_size
-        dy = math.sin(roll_rad + math.pi/2) * horizon_size
-        
-        # Calculate horizon line offset for pitch
-        pitch_dx = math.sin(roll_rad) * pitch_offset
-        pitch_dy = -math.cos(roll_rad) * pitch_offset
-        
-        # Draw horizon line
+    def draw_hud(self, airplane):
+        altitude_text = f"Altitude: {int(airplane.position.y)} m"
+        font = pygame.font.SysFont(None, 24)
+        altitude_surface = font.render(altitude_text, True, (255, 255, 255))
+        screen.blit(altitude_surface, (10, 10))
+        speed_text = f"Speed: {int(airplane.velocity.magnitude() * 50)} km/h"
+        speed_surface = font.render(speed_text, True, (255, 255, 255))
+        screen.blit(speed_surface, (10, 40))
+        pygame.draw.rect(screen, (50, 50, 50), pygame.Rect(10, 70, 100, 20))
+        pygame.draw.rect(screen, (255, 0, 0), pygame.Rect(10, 70, 100 * airplane.throttle, 20))
+        throttle_text = f"Throttle: {int(airplane.throttle * 100)}%"
+        throttle_surface = font.render(throttle_text, True, (255, 255, 255))
+        screen.blit(throttle_surface, (120, 70))
+        horizon_center = (WIDTH - 100, 100)
+        pygame.draw.circle(screen, (0, 0, 0), horizon_center, 50, 2)
+        pitch_offset = math.sin(airplane.rotation.x) * 40
+        roll_angle = -airplane.rotation.z
         pygame.draw.line(
-            screen, 
-            (255, 255, 255),
-            (center_x - dx + pitch_dx, center_y - dy + pitch_dy),
-            (center_x + dx + pitch_dx, center_y + dy + pitch_dy),
+            screen,
+            (150, 150, 150),
+            (
+                horizon_center[0] - 50 * math.cos(roll_angle),
+                horizon_center[1] - 50 * math.sin(roll_angle) + pitch_offset
+            ),
+            (
+                horizon_center[0] + 50 * math.cos(roll_angle),
+                horizon_center[1] + 50 * math.sin(roll_angle) + pitch_offset
+            ),
             2
         )
-        
-        # Draw pitch ladder
-        for pitch in [-20, -10, 10, 20]:
-            pitch_line_offset = pitch * 2  # 2 pixels per degree
-            pitch_total_dy = -math.cos(roll_rad) * pitch_line_offset
-            pitch_total_dx = math.sin(roll_rad) * pitch_line_offset
-            
-            # Draw shorter lines for pitch marks
-            line_length = 20
-            pygame.draw.line(
-                screen, 
-                (255, 255, 255),
-                (center_x - line_length*math.cos(roll_rad) + pitch_dx + pitch_total_dx, 
-                 center_y - line_length*math.sin(roll_rad) + pitch_dy + pitch_total_dy),
-                (center_x + line_length*math.cos(roll_rad) + pitch_dx + pitch_total_dx, 
-                 center_y + line_length*math.sin(roll_rad) + pitch_dy + pitch_total_dy),
-                1
-            )
-            
-            # Draw pitch value
-            pitch_text = font.render(f"{pitch}°", True, (255, 255, 255))
-            text_x = center_x + pitch_dx + pitch_total_dx + 25*math.cos(roll_rad)
-            text_y = center_y + pitch_dy + pitch_total_dy + 25*math.sin(roll_rad)
-            screen.blit(pitch_text, (text_x, text_y))
-        
-        # Draw center crosshair
-        crosshair_size = 10
-        pygame.draw.line(screen, (0, 255, 0), 
-                        (center_x - crosshair_size, center_y), 
-                        (center_x + crosshair_size, center_y), 2)
-        pygame.draw.line(screen, (0, 255, 0), 
-                        (center_x, center_y - crosshair_size), 
-                        (center_x, center_y + crosshair_size), 2)
+        camera_mode_text = f"Camera: {'First Person' if camera_mode == 'first_person' else 'Third Person'}"
+        camera_surface = font.render(camera_mode_text, True, (255, 255, 255))
+        screen.blit(camera_surface, (WIDTH - 200, HEIGHT - 30))
+        controls_text = "Controls: Arrow keys - Pitch/Yaw | W/S - Throttle | A/D - Roll | C - Toggle Camera"
+        controls_surface = font.render(controls_text, True, (255, 255, 255))
+        screen.blit(controls_surface, (10, HEIGHT - 30))
 
-def init_opengl(width, height):
-    """Initialize OpenGL settings."""
-    glViewport(0, 0, width, height)
-    glMatrixMode(GL_PROJECTION)
-    glLoadIdentity()
-    gluPerspective(60, width / float(height), 0.1, 100.0)
-    glMatrixMode(GL_MODELVIEW)
-    glLoadIdentity()
-    
-    # Enable depth testing and back-face culling
-    glEnable(GL_DEPTH_TEST)
-    glEnable(GL_CULL_FACE)
-    glCullFace(GL_BACK)
-    
-    # Enable texture mapping
-    glEnable(GL_TEXTURE_2D)
-    
-    # Set up lighting
-    glEnable(GL_LIGHTING)
-    glEnable(GL_LIGHT0)
-    glEnable(GL_COLOR_MATERIAL)
-    glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE)
-    
-    # Ambient light (global illumination)
-    glLightModelfv(GL_LIGHT_MODEL_AMBIENT, [0.2, 0.2, 0.2, 1.0])
-    
-    # Sun light (directional)
-    glLightfv(GL_LIGHT0, GL_AMBIENT, [0.1, 0.1, 0.1, 1.0])
-    glLightfv(GL_LIGHT0, GL_DIFFUSE, [1.0, 1.0, 0.9, 1.0])
-    glLightfv(GL_LIGHT0, GL_POSITION, [0.5, 1.0, 0.5, 0.0])  # Directional light
+# Initialize game objects
+airplane = Airplane()
+camera = Camera()
+renderer = Renderer()
+ground = Ground()
+clouds = [Cloud() for _ in range(CLOUD_COUNT)]
+mountains = [Mountain() for _ in range(MOUNTAIN_COUNT)]
+camera_mode = "third_person"
+camera_distance = 50
+camera_height = 15
 
-def generate_terrain(size=20, resolution=20):
-    """Generate a simple terrain grid."""
-    vertices = []
-    for z in range(resolution):
-        for x in range(resolution):
-            # Calculate actual x, z positions
-            pos_x = (x / (resolution-1) - 0.5) * size
-            pos_z = (z / (resolution-1) - 0.5) * size
-            
-            # Compute a simple height
-            height = 0
-            
-            # Add some hills
-            for hill in range(5):
-                hill_x = random.uniform(-size/2, size/2)
-                hill_z = random.uniform(-size/2, size/2)
-                hill_height = random.uniform(0.2, 0.6)
-                hill_width = random.uniform(2, 5)
-                
-                dist = math.sqrt((pos_x - hill_x)**2 + (pos_z - hill_z)**2)
-                height += hill_height * math.exp(-(dist**2) / (2 * hill_width**2))
-            
-            vertices.append((pos_x, height, pos_z))
-    
-    return vertices, resolution
+# Main game loop
+running = True
+last_time = pygame.time.get_ticks()
+fps_counter = 0
+fps_timer = 0
+fps = 0
 
-def draw_terrain(vertices, resolution, texture_id):
-    """Draw the terrain mesh."""
-    glBindTexture(GL_TEXTURE_2D, texture_id)
+while running:
+    current_time = pygame.time.get_ticks()
+    dt = (current_time - last_time) / 1000.0
+    last_time = current_time
     
-    glColor3f(1, 1, 1)
+    fps_counter += 1
+    fps_timer += dt
+    if fps_timer >= 1.0:
+        fps = fps_counter
+        fps_counter = 0
+        fps_timer = 0
     
-    # Draw terrain as a triangle mesh
-    for z in range(resolution - 1):
-        for x in range(resolution - 1):
-            # Get the four corners of the current grid cell
-            idx00 = z * resolution + x
-            idx10 = z * resolution + (x + 1)
-            idx01 = (z + 1) * resolution + x
-            idx11 = (z + 1) * resolution + (x + 1)
-            
-            # Calculate vertex normals (simplified)
-            v00, v10, v01, v11 = vertices[idx00], vertices[idx10], vertices[idx01], vertices[idx11]
-            
-            # Calculate texture coordinates
-            tex_x1, tex_z1 = x / (resolution-1), z / (resolution-1)
-            tex_x2, tex_z2 = (x+1) / (resolution-1), (z+1) / (resolution-1)
-            
-            # Draw the two triangles for this grid cell
-            glBegin(GL_TRIANGLES)
-            
-            # Triangle 1: v00, v10, v11
-            # Calculate normal
-            u = (v10[0] - v00[0], v10[1] - v00[1], v10[2] - v00[2])
-            v = (v11[0] - v10[0], v11[1] - v10[1], v11[2] - v10[2])
-            normal = (
-                u[1]*v[2] - u[2]*v[1],
-                u[2]*v[0] - u[0]*v[2],
-                u[0]*v[1] - u[1]*v[0]
-            )
-            mag = math.sqrt(sum(n*n for n in normal))
-            if mag > 0:
-                normal = tuple(n/mag for n in normal)
-            
-            glNormal3fv(normal)
-            glTexCoord2f(tex_x1, tex_z1)
-            glVertex3fv(v00)
-            
-            glTexCoord2f(tex_x2, tex_z1)
-            glVertex3fv(v10)
-            
-            glTexCoord2f(tex_x2, tex_z2)
-            glVertex3fv(v11)
-            
-            # Triangle 2: v00, v11, v01
-            # Calculate normal
-            u = (v11[0] - v00[0], v11[1] - v00[1], v11[2] - v00[2])
-            v = (v01[0] - v00[0], v01[1] - v00[1], v01[2] - v00[2])
-            normal = (
-                u[1]*v[2] - u[2]*v[1],
-                u[2]*v[0] - u[0]*v[2],
-                u[0]*v[1] - u[1]*v[0]
-            )
-            mag = math.sqrt(sum(n*n for n in normal))
-            if mag > 0:
-                normal = tuple(n/mag for n in normal)
-            
-            glNormal3fv(normal)
-            glTexCoord2f(tex_x1, tex_z1)
-            glVertex3fv(v00)
-            
-            glTexCoord2f(tex_x2, tex_z2)
-            glVertex3fv(v11)
-            
-            glTexCoord2f(tex_x1, tex_z2)
-            glVertex3fv(v01)
-            
-            glEnd()
-
-def generate_terrain_texture():
-    """Generate a simple terrain texture with grass and dirt."""
-    size = 256
-    surface = pygame.Surface((size, size), pygame.SRCALPHA)
-    
-    # Base color (grass green)
-    surface.fill((76, 153, 0))
-    
-    # Add some noise/variation
-    for x in range(size):
-        for y in range(size):
-            # Add some noise
-            noise = random.randint(-15, 15)
-            
-            # Get current color and adjust
-            color = surface.get_at((x, y))
-            new_color = (
-                max(0, min(255, color[0] + noise)),
-                max(0, min(255, color[1] + noise)),
-                max(0, min(255, color[2] + noise)),
-                255
-            )
-            surface.set_at((x, y), new_color)
-    
-    # Add some dirt patches
-    for _ in range(20):
-        patch_x = random.randint(0, size)
-        patch_y = random.randint(0, size)
-        patch_size = random.randint(5, 20)
-        
-        for dx in range(-patch_size, patch_size+1):
-            for dy in range(-patch_size, patch_size+1):
-                dist = math.sqrt(dx*dx + dy*dy)
-                if dist > patch_size:
-                    continue
-                
-                px, py = patch_x + dx, patch_y + dy
-                if 0 <= px < size and 0 <= py < size:
-                    fade = 1 - (dist / patch_size)
-                    current = surface.get_at((px, py))
-                    
-                    # Mix with dirt color
-                    dirt_color = (139, 69, 19)
-                    new_color = (
-                        int(current[0] * (1 - fade) + dirt_color[0] * fade),
-                        int(current[1] * (1 - fade) + dirt_color[1] * fade),
-                        int(current[2] * (1 - fade) + dirt_color[2] * fade),
-                        255
-                    )
-                    surface.set_at((px, py), new_color)
-    
-    return surface
-
-def main():
-    pygame.init()
-    pygame.font.init()
-    
-    # Set up the display
-    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), DOUBLEBUF | OPENGL)
-    pygame.display.set_caption("3D Flight Simulator")
-    init_opengl(SCREEN_WIDTH, SCREEN_HEIGHT)
-    
-    # Load textures
-    earth_surface = generate_earth_texture()
-    earth_texture = load_texture_from_surface(earth_surface)
-    
-    cloud_surface = generate_cloud_texture()
-    cloud_texture = load_texture_from_surface(cloud_surface)
-    
-    terrain_surface = generate_terrain_texture()
-    terrain_texture = load_texture_from_surface(terrain_surface)
-    
-    # Generate terrain
-    terrain_vertices, terrain_resolution = generate_terrain(size=40, resolution=50)
-    
-    # Create aircraft
-    aircraft = Aircraft()
-    aircraft.position = [0, 1, -5]  # Start position
-    
-    # Generate clouds
-    clouds = []
-    for _ in range(50):
-        cloud_pos = [
-            random.uniform(-20, 20),
-            random.uniform(3, 10),
-            random.uniform(-20, 20)
-        ]
-        cloud_size = random.uniform(0.5, 2.0)
-        clouds.append(Cloud(cloud_pos, cloud_size))
-    
-    # Generate buildings for a city
-    buildings = []
-    for _ in range(30):
-        building_pos = [
-            random.uniform(-10, 10),
-            0,
-            random.uniform(-10, 10)
-        ]
-        
-        # Make sure buildings aren't too close to the runway
-        dist_to_runway = math.sqrt(building_pos[0]**2 + building_pos[2]**2)
-        if dist_to_runway < 3:
-            continue
-        
-        building_width = random.uniform(0.3, 1.2)
-        building_height = random.uniform(0.5, 3.0)
-        building_depth = random.uniform(0.3, 1.2)
-        
-        buildings.append(Building(building_pos, building_width, building_height, building_depth))
-    
-    # Clock for timing
-    clock = pygame.time.Clock()
-    fps_values = []
-    fps_update_time = 0
-    current_fps = 0
-    
-    # Main game loop
-    running = True
-    while running:
-        # Calculate delta time
-        dt = clock.tick(60) / 1000.0
-        
-        # Update FPS counter
-        fps_values.append(1.0 / max(dt, 0.001))
-        if len(fps_values) > 10:
-            fps_values.pop(0)
-        
-        # Update FPS display every 0.5 seconds
-        fps_update_time += dt
-        if fps_update_time >= 0.5:
-            current_fps = sum(fps_values) / len(fps_values)
-            fps_update_time = 0
-        
-        # Process events
-        for event in pygame.event.get():
-            if event.type == QUIT:
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
                 running = False
-            elif event.type == KEYDOWN:
-                if event.key == K_ESCAPE:
-                    running = False
-                elif event.key == K_c:
-                    # Cycle through camera modes
-                    aircraft.camera_mode = (aircraft.camera_mode + 1) % 3
-                elif event.key == K_r:
-                    # Reset aircraft position
-                    aircraft.position = [0, 1, -5]
-                    aircraft.velocity = [0, 0, 0]
-                    aircraft.orientation = [0, 0, 0]
-                    aircraft.throttle = 0.0
-                elif event.key == K_f:
-                    # Toggle FPS display
-                    DEBUG_MODE = not DEBUG_MODE
-        
-        # Get keyboard state
-        keys = pygame.key.get_pressed()
-        
-        # Flight controls
-        if keys[K_w]:
-            aircraft.pitch_input = -1.0  # Pitch down
-        elif keys[K_s]:
-            aircraft.pitch_input = 1.0   # Pitch up
-        else:
-            aircraft.pitch_input = 0.0
-        
-        if keys[K_a]:
-            aircraft.roll_input = -1.0   # Roll left
-        elif keys[K_d]:
-            aircraft.roll_input = 1.0    # Roll right
-        else:
-            aircraft.roll_input = 0.0
-        
-        if keys[K_q]:
-            aircraft.yaw_input = -1.0    # Yaw left
-        elif keys[K_e]:
-            aircraft.yaw_input = 1.0     # Yaw right
-        else:
-            aircraft.yaw_input = 0.0
-        
-        # Throttle control
-        if keys[K_UP]:
-            aircraft.throttle = min(1.0, aircraft.throttle + 0.01)
-        elif keys[K_DOWN]:
-            aircraft.throttle = max(0.0, aircraft.throttle - 0.01)
-        
-        # Speed boost with shift
-        if keys[K_LSHIFT]:
-            aircraft.max_speed = 1.0
-        else:
-            aircraft.max_speed = 0.5
-        
-        # Update aircraft physics
-        aircraft.update(dt)
-        
-        # Set up the camera
-        aircraft.setup_camera()
-        
-        # Clear the screen
-        glClearColor(0.5, 0.7, 1.0, 1.0)  # Sky blue
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        
-        # Draw sky
-        draw_sky()
-        
-        # Draw terrain
-        draw_terrain(terrain_vertices, terrain_resolution, terrain_texture)
-        
-        # Draw runway
-        draw_runway()
-        
-        # Draw buildings
-        for building in buildings:
-            building.draw()
-        
-        # Draw aircraft (except in cockpit view)
-        if aircraft.camera_mode != 0:
-            aircraft.draw()
-        
-        # Draw clouds
-        glBindTexture(GL_TEXTURE_2D, cloud_texture)
-        for cloud in clouds:
-            cloud.draw()
-        
-        # Draw the Earth in the distance
-        draw_earth(earth_texture, [0, -100, 0], 100)
-        
-        # Swap buffers
-        pygame.display.flip()
-        
-        # Draw HUD overlay (after OpenGL rendering)
-        draw_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-        draw_hud(draw_surface, aircraft, current_fps)
-        
-        # Temporarily disable OpenGL and draw the HUD
-        pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), DOUBLEBUF | OPENGL)
-        screen.blit(draw_surface, (0, 0))
-        pygame.display.flip()
+            elif event.key == pygame.K_c:
+                camera_mode = "first_person" if camera_mode == "third_person" else "third_person"
     
-    pygame.quit()
+    keys = pygame.key.get_pressed()
+    if keys[pygame.K_w]:
+        airplane.throttle = min(1.0, airplane.throttle + 0.01)
+    if keys[pygame.K_s]:
+        airplane.throttle = max(0.0, airplane.throttle - 0.01)
+    if keys[pygame.K_UP]:
+        airplane.rotation.x += ROTATION_SPEED
+    if keys[pygame.K_DOWN]:
+        airplane.rotation.x -= ROTATION_SPEED
+    if keys[pygame.K_LEFT]:
+        airplane.rotation.y -= ROTATION_SPEED
+    if keys[pygame.K_RIGHT]:
+        airplane.rotation.y += ROTATION_SPEED
+    if keys[pygame.K_a]:
+        airplane.rotation.z += ROTATION_SPEED
+    if keys[pygame.K_d]:
+        airplane.rotation.z -= ROTATION_SPEED
+    
+    airplane.rotation.x = max(min(airplane.rotation.x, math.pi/4), -math.pi/4)
+    airplane.rotation.z = max(min(airplane.rotation.z, math.pi/4), -math.pi/4)
+    
+    airplane.update_vectors()
+    airplane.apply_physics()
+    
+    terrain_height = ground.get_height_at_position(airplane.position.x, airplane.position.z)
+    if airplane.position.y < terrain_height + 5:
+        airplane.position.y = terrain_height + 5
+        airplane.velocity.y = max(0, airplane.velocity.y)
+    
+    for cloud in clouds:
+        cloud.update()
+    
+    if camera_mode == "third_person":
+        target_offset = airplane.forward * -camera_distance
+        target_offset.y += camera_height
+        target_pos = airplane.position + target_offset
+        t = 0.1
+        camera.position.x += (target_pos.x - camera.position.x) * t
+        camera.position.y += (target_pos.y - camera.position.y) * t
+        camera.position.z += (target_pos.z - camera.position.z) * t
+        look_direction = airplane.position - camera.position
+        camera.pitch = math.asin(look_direction.y / look_direction.magnitude())
+        camera.yaw = math.atan2(look_direction.z, look_direction.x)
+    else:
+        camera.position = airplane.position
+        camera.pitch = airplane.rotation.x
+        camera.yaw = airplane.rotation.y
+    
+    camera.update_vectors()
+    
+    screen.fill(SKY_COLOR)
+    
+    renderer.draw_mountains(camera, mountains)
+    renderer.draw_ground(camera, ground, airplane.position)
+    renderer.draw_clouds(camera, clouds)
+    
+    if camera_mode == "third_person":
+        renderer.draw_airplane(camera, airplane)
+    
+    renderer.draw_hud(airplane)
+    
+    fps_text = f"FPS: {fps}"
+    fps_surface = pygame.font.SysFont(None, 24).render(fps_text, True, (255, 255, 255))
+    screen.blit(fps_surface, (WIDTH - 80, 10))
+    
+    pygame.display.flip()
+    clock.tick(60)
 
-if __name__ == '__main__':
-    main()
+pygame.quit()
+sys.exit()
