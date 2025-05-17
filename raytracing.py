@@ -10,10 +10,15 @@ camera_movement_enabled = False  # New global variable
 NUM_CPU_CORES = multiprocessing.cpu_count() - 1
 MAX_BOUNCES = 6
 focal_length = 800.0
-WINDOW_HEIGHT = 600
-WINDOW_WIDTH = int(WINDOW_HEIGHT * 1.5)
-RENDER_HEIGHT = 150
+
+# --- Resolution Control ---
+# Set these to your desired render resolution
+RENDER_HEIGHT = 325
 RENDER_WIDTH = int(RENDER_HEIGHT * 1.5)
+# Set these to your desired window/display size (can be different from render res)
+WINDOW_HEIGHT = 650
+WINDOW_WIDTH = int(WINDOW_HEIGHT * 1.5)
+# --------------------------
 
 
 cam_pos = np.array([150, 97, -800], dtype=np.float32)
@@ -177,6 +182,7 @@ def render_full(cam_pos, cam_yaw, cam_pitch, add_jitter=False):
     with concurrent.futures.ProcessPoolExecutor(max_workers=NUM_CPU_CORES) as executor:
         results = list(executor.map(batch_trace_rays, batches))
     flat_result = [item for sublist in results for item in sublist]
+    # Ensure result shape matches RENDER_HEIGHT x RENDER_WIDTH
     result = np.array(flat_result, dtype=np.float32).reshape(RENDER_HEIGHT, RENDER_WIDTH, 3) * 255
     return result
 
@@ -285,6 +291,7 @@ if __name__ == '__main__':
             prev_cam_yaw = cam_yaw
             prev_cam_pitch = cam_pitch
             disp_array = np.clip(accumulated_image, 0, 255).astype(np.uint8)
+            # Always scale from RENDER_WIDTH/RENDER_HEIGHT to WINDOW_WIDTH/HEIGHT
             lowres_surf = pygame.surfarray.make_surface(disp_array.transpose(1, 0, 2))
             scaled_surf = pygame.transform.scale(lowres_surf, (WINDOW_WIDTH, WINDOW_HEIGHT))
             screen.blit(scaled_surf, (0, 0))
