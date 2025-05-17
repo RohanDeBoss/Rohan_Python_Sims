@@ -13,10 +13,9 @@ INITIAL_SQUARE_SIZE = 66
 INITIAL_WINDOW_WIDTH = (8 * INITIAL_SQUARE_SIZE) + 290
 INITIAL_WINDOW_HEIGHT = (8 * INITIAL_SQUARE_SIZE) + 29
 CONTROL_PANEL_DEFAULT_WIDTH = INITIAL_WINDOW_WIDTH - (8 * INITIAL_SQUARE_SIZE) - 37
-TT_SIZE_POWER_OF_2 = 17 # 2^17 = 131072 entries
+TT_SIZE_POWER_OF_2 = 17 
 # ----------------------------
 
-# Original PSTs at their original scale
 ORIGINAL_PSTS_RAW = {
     chess.PAWN: [0,0,0,0,0,0,0,0,50,50,50,50,50,50,50,50,10,10,20,30,30,20,10,10,5,5,10,25,25,10,5,5,0,0,0,20,20,0,0,0,5,-5,-10,0,0,-10,-5,5,5,10,10,-20,-20,10,10,5,0,0,0,0,0,0,0,0],
     chess.KNIGHT: [-50,-40,-30,-30,-30,-30,-40,-50,-40,-20,0,0,0,0,-20,-40,-30,0,10,15,15,10,0,-30,-30,5,15,20,20,15,5,-30,-30,0,15,20,20,15,0,-30,-30,5,10,15,15,10,5,-30,-40,-20,0,5,5,0,-20,-40,-50,-40,-30,-30,-30,-30,-40,-50],
@@ -25,14 +24,12 @@ ORIGINAL_PSTS_RAW = {
     chess.QUEEN: [-20,-10,-10,-5,-5,-10,-10,-20,-10,0,0,0,0,0,0,-10,-10,0,5,5,5,5,0,-10,-5,0,5,5,5,5,0,-5,0,0,5,5,5,5,0,-5,-10,5,5,5,5,5,0,-10,-10,0,5,0,0,0,0,-10,-20,-10,-10,-5,-5,-10,-10,-20],
     chess.KING: [ 20, 30, 10,  0,  0, 10, 30, 20, 20, 20,  0,  0,  0,  0, 20, 20,-10,-20,-20,-20,-20,-20,-20,-10,-20,-30,-30,-40,-40,-30,-30,-20,-30,-40,-40,-50,-50,-40,-40,-30,-30,-40,-40,-50,-50,-40,-40,-30,-30,-40,-40,-50,-50,-40,-40,-30,-30,-40,-40,-50,-50,-40,-40,-30]
 }
-# PSTs are reversed for a1=0 indexing
 PST = {piece_type: list(reversed(values)) for piece_type, values in ORIGINAL_PSTS_RAW.items()}
-
 
 TT_EXACT = 0; TT_LOWERBOUND = 1; TT_UPPERBOUND = 2
 CHESS_SQUARES = list(chess.SQUARES)
 
-class ChessAI:
+class ChessAI: # No changes in this class
     CHECK_BONUS_MIN = 10000 
     CHECK_BONUS_ADDITIONAL_MAX = 140000 
     CHECK_BONUS_DECAY_BASE = 6/7
@@ -51,12 +48,11 @@ class ChessAI:
         self.LOSS_SCORE = -1000000
         self.CHECKMATE_SCORE = 900000
         
-        self.TOTAL_STATIC_CHECK_VALUE = 300 # This value is added to material/PST sum
+        self.TOTAL_STATIC_CHECK_VALUE = 300 
         self.MAX_Q_DEPTH = 5
         
-        # Piece values at their original intended scale for evaluation and NMP
-        self._PIECE_VALUES_LST_FOR_NMP_MATERIAL = [0, 100, 320, 330, 500, 900, 20000] # King high for NMP
-        self.EVAL_PIECE_VALUES_LST = [0, 100, 320, 330, 500, 900, 0] # King 0 for material eval
+        self._PIECE_VALUES_LST_FOR_NMP_MATERIAL = [0, 100, 320, 330, 500, 900, 20000]
+        self.EVAL_PIECE_VALUES_LST = [0, 100, 320, 330, 500, 900, 0]
         
         self.NMP_R_REDUCTION = 3
         self.NMP_MIN_DEPTH_THRESHOLD = 1 + self.NMP_R_REDUCTION
@@ -68,7 +64,6 @@ class ChessAI:
         self.MINOR_PROMO_ORDER_BONUS = 30000
         self.KILLER_1_ORDER_BONUS = 80000
         self.KILLER_2_ORDER_BONUS = 70000
-
 
     def init_zobrist_tables(self):
         random.seed(42)
@@ -163,8 +158,8 @@ class ChessAI:
         for sq in CHESS_SQUARES:
             piece = board.piece_at(sq)
             if piece:
-                value = self.EVAL_PIECE_VALUES_LST[piece.piece_type] # Original scale piece value
-                pst_val = PST[piece.piece_type][sq if piece.color == chess.WHITE else chess.square_mirror(sq)] # Original scale PST value
+                value = self.EVAL_PIECE_VALUES_LST[piece.piece_type]
+                pst_val = PST[piece.piece_type][sq if piece.color == chess.WHITE else chess.square_mirror(sq)]
                 if piece.color == chess.WHITE:
                     material += value; positional += pst_val
                 else:
@@ -499,12 +494,25 @@ class ChessUI:
 
     def _highlight_square_selected(self, sq: chess.Square):
         item_id = self.square_item_ids.get(sq)
+        # print(f"DEBUG HighlightSquareSelected: sq={chess.square_name(sq)}, item_id from self.square_item_ids.get(sq) is {item_id}") 
         if item_id:
             try:
-                if item_id not in self.original_square_colors: self.original_square_colors[item_id] = self.canvas.itemcget(item_id,"fill")
-                self.canvas.itemconfig(item_id, fill=self.colors['highlight_selected_fill']); self.highlighted_rect_id = item_id
-                self.canvas.tag_raise("piece_outline"); self.canvas.tag_raise("piece_fg")
-            except tk.TclError: self.highlighted_rect_id = None
+                original_color = self.canvas.itemcget(item_id,"fill")
+                # print(f"DEBUG HighlightSquareSelected: Original color of item {item_id} is {original_color}") 
+                if item_id not in self.original_square_colors: 
+                    self.original_square_colors[item_id] = original_color
+                
+                self.canvas.itemconfig(item_id, fill=self.colors['highlight_selected_fill'])
+                # print(f"DEBUG HighlightSquareSelected: Set item {item_id} to fill {self.colors['highlight_selected_fill']}") 
+                self.highlighted_rect_id = item_id
+                self.canvas.tag_raise("piece_outline") 
+                self.canvas.tag_raise("piece_fg")
+            except tk.TclError as e:
+                # print(f"DEBUG HighlightSquareSelected: TclError for item {item_id}: {e}") 
+                self.highlighted_rect_id = None
+        # else:
+            # print(f"DEBUG HighlightSquareSelected: No item_id found for square {chess.square_name(sq)} in self.square_item_ids")
+
 
     def _highlight_legal_move(self, sq: chess.Square, is_capture: bool):
         x1,y1,x2,y2 = self._get_square_coords(sq); cx,cy=(x1+x2)//2,(y1+y2)//2
@@ -515,11 +523,31 @@ class ChessUI:
         self.canvas.create_oval(cx-radius,cy-radius,cx+radius,cy+radius, fill=fill_color_rgb, stipple=stipple_pattern, outline="", tags="highlight_dot")
 
     def _show_legal_moves_for_selected_piece(self):
+        # ***** CORRECTED CONDITION HERE *****
         if self.drag_selected_square is not None: 
+        # ***** END OF CORRECTION *****
+            # print(f"DEBUG ShowLegalMoves: Called for {chess.square_name(self.drag_selected_square)}") # DEBUG
             self._highlight_square_selected(self.drag_selected_square)
-            for m in self.board.legal_moves:
+            
+            has_any_legal_moves_at_all = False
+            has_legal_moves_from_selected_sq = False
+            
+            all_moves_list = list(self.board.legal_moves) 
+            # print(f"DEBUG ShowLegalMoves: All legal moves on board ({len(all_moves_list)}): {[m.uci() for m in all_moves_list]}") # DEBUG
+
+            if all_moves_list:
+                has_any_legal_moves_at_all = True
+
+            for m in all_moves_list: 
                 if m.from_square == self.drag_selected_square:
+                    # print(f"DEBUG ShowLegalMoves: Found legal move from {chess.square_name(self.drag_selected_square)}: {m.uci()}") # DEBUG
+                    has_legal_moves_from_selected_sq = True
                     self._highlight_legal_move(m.to_square, self.board.is_capture(m))
+            
+            # if not has_any_legal_moves_at_all: # DEBUG
+            #     print(f"DEBUG ShowLegalMoves: Board has NO legal moves at all.")
+            # elif not has_legal_moves_from_selected_sq: # DEBUG
+            #     print(f"DEBUG ShowLegalMoves: No legal moves found originating from {chess.square_name(self.drag_selected_square)}")
     
     def _update_check_display(self):
         filled_check_char = '✚'; empty_check_char = '⊕'
@@ -577,7 +605,13 @@ class ChessUI:
         if eval_text != self.eval_label.cget("text"): self.eval_label.config(text=eval_text)
 
     def reset_game(self):
-        self.board.reset(); self.game_over_flag=False; self.MAX_CHECKS=NUM_CHECKS_TO_WIN
+        self.board.reset() 
+        # print(f"DEBUG ResetGame: Board FEN after reset: {self.board.fen()}")
+        # print(f"DEBUG ResetGame: Castling rights (int): {self.board.castling_rights}")
+        # print(f"DEBUG ResetGame: Castling rights (uci): {self.board.castling_xfen()}")
+        # print(f"DEBUG ResetGame: Is board valid?: {self.board.is_valid()}")
+
+        self.game_over_flag=False; self.MAX_CHECKS=NUM_CHECKS_TO_WIN
         if hasattr(self,'root'): self.root.title(f"{self.MAX_CHECKS}-Check Chess")
         if hasattr(self,'checks_labelframe'): self.checks_labelframe.config(text=f"Checks (Goal: {self.MAX_CHECKS})")
         self.white_checks_delivered=0; self.black_checks_delivered=0; self.check_history.clear()
@@ -623,12 +657,20 @@ class ChessUI:
     def on_square_interaction_start(self,event):
         if self.game_over_flag or self.board.turn!=chess.WHITE or self.ai_thinking: return
         clicked_sq = self._get_canvas_xy_to_square(event.x,event.y)
-        if not clicked_sq: return
-        if self.drag_selected_square and self.drag_selected_square!=clicked_sq: self._attempt_player_move(self.drag_selected_square,clicked_sq); return
+        if clicked_sq is None : return # Check against None for square 0 (a1)
+        
+        # ***** CORRECTED CONDITION HERE *****
+        if self.drag_selected_square is not None and self.drag_selected_square != clicked_sq : 
+        # ***** END OF CORRECTION *****
+            self._attempt_player_move(self.drag_selected_square,clicked_sq)
+            return
+
         self._clear_highlights()
         piece = self.board.piece_at(clicked_sq)
+
         if piece and piece.color==self.board.turn: 
-            self.drag_selected_square=clicked_sq; self.dragging_piece_item_id=self.piece_item_ids.get(clicked_sq)
+            self.drag_selected_square=clicked_sq
+            self.dragging_piece_item_id=self.piece_item_ids.get(clicked_sq)
             if self.dragging_piece_item_id:
                 outline_tags = self.canvas.find_withtag(f"piece_outline_{clicked_sq}")
                 for item_id_outline in outline_tags: self.canvas.lift(item_id_outline)
@@ -640,32 +682,51 @@ class ChessUI:
                     self.canvas.coords(self.dragging_piece_item_id,nx,ny)
                     for item_id_outline in outline_tags: self.canvas.coords(item_id_outline,nx,ny)
             self._show_legal_moves_for_selected_piece()
-        else: self.drag_selected_square=None; self.dragging_piece_item_id=None
+        else: 
+            self.drag_selected_square=None
+            self.dragging_piece_item_id=None
 
     def on_piece_drag_motion(self,event):
-        if self.dragging_piece_item_id and self.drag_selected_square and not self.ai_thinking:
+        # ***** CORRECTED CONDITION HERE *****
+        if self.dragging_piece_item_id and self.drag_selected_square is not None and not self.ai_thinking:
+        # ***** END OF CORRECTION *****
             nx,ny = event.x-self.drag_start_x_offset, event.y-self.drag_start_y_offset
             self.canvas.coords(self.dragging_piece_item_id,nx,ny)
-            for item_id_outline in self.canvas.find_withtag(f"piece_outline_{self.drag_selected_square}"):
-                 self.canvas.coords(item_id_outline,nx,ny)
+            # Ensure self.drag_selected_square is valid before using in find_withtag
+            if self.drag_selected_square is not None:
+                 for item_id_outline in self.canvas.find_withtag(f"piece_outline_{self.drag_selected_square}"):
+                    self.canvas.coords(item_id_outline,nx,ny)
 
     def on_square_interaction_end(self,event):
-        if not self.drag_selected_square or self.ai_thinking: 
+        # ***** CORRECTED CONDITION HERE *****
+        if self.drag_selected_square is None or self.ai_thinking: 
+        # ***** END OF CORRECTION *****
             if self.dragging_piece_item_id: self.redraw_board_and_pieces()
             self._clear_highlights(); self.drag_selected_square = None; self.dragging_piece_item_id = None
             return
+
         to_sq = self._get_canvas_xy_to_square(event.x,event.y)
+        from_sq_before_attempt = self.drag_selected_square 
+
         self.redraw_board_and_pieces(); self._clear_highlights()      
-        if to_sq and self.drag_selected_square!=to_sq: self._attempt_player_move(self.drag_selected_square,to_sq)
-        else: self.drag_selected_square=None; self.dragging_piece_item_id=None
+        
+        if to_sq is not None and from_sq_before_attempt is not None and to_sq != from_sq_before_attempt:
+            self._attempt_player_move(from_sq_before_attempt,to_sq)
+        else: 
+            self.drag_selected_square=None 
+            self.dragging_piece_item_id=None
 
     def _attempt_player_move(self,from_sq:chess.Square,to_sq:chess.Square):
         promo=None; p=self.board.piece_at(from_sq)
         if p and p.piece_type==chess.PAWN:
             if (p.color==chess.WHITE and chess.square_rank(to_sq)==7) or \
                (p.color==chess.BLACK and chess.square_rank(to_sq)==0): promo=chess.QUEEN
+        
         move=chess.Move(from_sq,to_sq,promotion=promo)
-        self.drag_selected_square=None; self.dragging_piece_item_id=None
+        
+        self.drag_selected_square=None 
+        self.dragging_piece_item_id=None
+
         if move in self.board.legal_moves:
             self.check_history.append((self.white_checks_delivered,self.black_checks_delivered))
             self.board.push(move)
@@ -674,7 +735,8 @@ class ChessUI:
             if not self.game_over_flag: 
                 self.update_status_label(for_ai_move_eval=None) 
                 self.root.update_idletasks(); self._start_ai_move_thread()
-        else: self.redraw_board_and_pieces()
+        else: 
+            self.redraw_board_and_pieces()
 
     def _start_ai_move_thread(self):
         if self.ai_thinking: return
@@ -694,13 +756,15 @@ class ChessUI:
         total_nodes = self.ai.nodes_evaluated + self.ai.q_nodes_evaluated
         nps = total_nodes/elapsed if elapsed>0 else 0
         tt_fill = (len(self.ai.transposition_table)/self.ai.tt_size_limit)*100 if self.ai.tt_size_limit>0 else 0
-
+        
         ai_player_color_char = 'White' if board_copy.turn == chess.WHITE else 'Black'
+        move_uci_str = ai_move.uci() if ai_move else "None (no move found/game over)"
         
         print_info = (f"AI playing ({ai_player_color_char}) | Eval: {eval_after_search_internal/100.0:+.2f} | "
                       f"Time:{elapsed:.2f}s | Depth:{depth} | Nodes:{total_nodes} (NPS:{nps:.0f}) | TT Fill:{tt_fill:.1f}%")
         
         self.ai_move_queue.put((ai_move, print_info, eval_after_search_internal))
+
     def _check_ai_queue_periodically(self):
         try:
             ai_move, print_info, eval_score_from_ai_internal = self.ai_move_queue.get_nowait()
@@ -721,12 +785,13 @@ class ChessUI:
                 if self.board.is_check() and self.board.turn==chess.WHITE: 
                     self.black_checks_delivered+=1
             else: 
-                print(f"AI Warning: Proposed move {ai_move.uci()} is illegal on current board!")
+                print(f"AI Warning: Proposed move {ai_move.uci()} is illegal on current board state!")
                 if not list(self.board.legal_moves): self.game_over_flag = True
             
             self.redraw_board_and_pieces()
             self.update_status_label(for_ai_move_eval=eval_score_from_ai_search_internal) 
         else: 
+            print("AI returned no move. Game likely over.")
             self.update_status_label()
             self.game_over_flag = True
         
