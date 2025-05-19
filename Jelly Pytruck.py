@@ -22,6 +22,7 @@ SKY_HORIZON_BLUE = (100, 180, 220); HILL_GREEN_FAR = (50, 120, 40)
 HILL_GREEN_NEAR = (80, 160, 70); CLOUD_WHITE = (240, 240, 250)
 PLATFORM_BLUE = (60, 100, 180)
 ICE_BLUE = (173, 216, 230, 220)
+RUBBER = (30, 30, 30)  # New: very dark gray/black for rubber
 
 # Physics Constants
 GRAVITY = (0, -900)
@@ -32,6 +33,8 @@ WHEEL_ELASTICITY = 0.18; GROUND_ELASTICITY = 0.2
 OBSTACLE_FRICTION = 0.5; OBSTACLE_ELASTICITY = 0.5
 ICE_FRICTION = 0.1
 ICE_ELASTICITY = 0.1
+RUBBER_FRICTION = 2.5  # New: very high friction
+RUBBER_ELASTICITY = 0.2
 
 # Control Forces / Motor Parameters
 MOTOR_TARGET_RATE_FORWARD = 26; MOTOR_TARGET_RATE_BACKWARD = -26
@@ -134,10 +137,10 @@ def create_stairs(space,start_bottom_left_pos,step_width,step_height,num_steps,d
         scx=current_x+(step_width/2*direction);scy=current_y+(step_height/2)
         create_box(space,pymunk.Vec2d(scx,scy),(step_width,step_height),mass=None,color=stair_color,friction=stair_friction,elasticity=stair_elasticity,**kwargs)
         current_x+=step_width*direction;current_y+=step_height
-def create_kinematic_platform(space,initial_pos,size,vertical_travel,speed,**kwargs):
+def create_kinematic_platform(space,initial_pos,size,vertical_travel,vertical_speed,**kwargs):
     body=pymunk.Body(body_type=pymunk.Body.KINEMATIC);body.position=initial_pos;shape=pymunk.Poly.create_box(body,size,radius=0.5)
     shape.friction=kwargs.get('friction',0.8);shape.elasticity=kwargs.get('elasticity',0.1);shape.collision_type=COLLISION_TYPE_PLATFORM;shape.color=kwargs.get('color',PLATFORM_BLUE);space.add(body,shape)
-    platform_data={'body':body,'min_y':initial_pos.y,'max_y':initial_pos.y+vertical_travel,'current_speed':speed,'initial_speed':speed};kinematic_platforms_data.append(platform_data);return body,shape
+    platform_data={'body':body,'min_y':initial_pos.y,'max_y':initial_pos.y+vertical_travel,'current_speed':vertical_speed,'initial_speed':vertical_speed};kinematic_platforms_data.append(platform_data);return body,shape
 
 # (Drawing functions and clear_level are same)
 def draw_pymunk_static_shapes(screen,space,camera_offset):
@@ -195,7 +198,6 @@ def clear_level(space,truck):
     for s in list(space.static_body.shapes):
         if s in space.shapes:space.remove(s)
 
-# --- LEVEL DESIGNS ---
 # (Constants and Truck class, other helper functions, main loop remain the same as your previous version)
 
 # --- LEVEL DESIGNS ---
@@ -208,157 +210,211 @@ def load_level(space, level_index):
     normal_stair_width = 55
     icy_stair_width = 65
 
-    def cgp(points, **kwargs):
-        for i in range(len(points) - 1): create_static_segment(space, points[i], points[i+1], **kwargs)
+    # Helper for readability in cgp calls
+    def Segment(x1, y1, x2, y2): return (pymunk.Vec2d(x1,y1), pymunk.Vec2d(x2,y2))
 
-    if level_index == 1: # Standard intro
+    def cgp(point_pairs_or_list, **kwargs):
+        if isinstance(point_pairs_or_list[0], tuple) and isinstance(point_pairs_or_list[0][0], (int, float)):
+            # It's a list of (x,y) tuples, treat as a continuous path
+            points = point_pairs_or_list
+            for i in range(len(points) - 1):
+                create_static_segment(space, points[i], points[i+1], **kwargs)
+        else:
+            # It's a list of Segment() calls or similar
+            for p1, p2 in point_pairs_or_list:
+                create_static_segment(space, p1, p2, **kwargs)
+
+
+    if level_index == 1:
         theme_color=ORANGE;finish_pos=pymunk.Vec2d(2800,base_y+60);gnd_y_fin=finish_pos.y+ground_at_finish_offset
         gp=[(-200,base_y),(600,base_y),(800,base_y+20),(1100,base_y+30),(1400,base_y),(1700,base_y-10),(2000,base_y-10),(2300,base_y+40),(finish_pos.x,gnd_y_fin),(finish_pos.x+200,gnd_y_fin)]
         cgp(gp); create_box(space,pymunk.Vec2d(950,base_y+55),(50,50),mass=5,color=theme_color); create_box(space,pymunk.Vec2d(1800,base_y+15),(100,30),mass=8,color=theme_color); create_box(space,pymunk.Vec2d(2450,base_y+65),(60,40),mass=6,color=theme_color)
-    elif level_index == 2: # Jumps
+    elif level_index == 2:
         theme_color=YELLOW;start_pos=pymunk.Vec2d(100,base_y+spawn_height_offset);finish_pos=pymunk.Vec2d(3000,base_y+120);gnd_y_fin=finish_pos.y+ground_at_finish_offset
-        gp_section1 = [(-100,base_y),(300,base_y),(600,base_y+80),(900,base_y+80)]; cgp(gp_section1)
-        gp_section2 = [(1050,base_y+80),(1100,base_y+20),(1400,base_y+30),(1600,base_y+100)]; cgp(gp_section2)
-        gp_section3 = [(1750,base_y+100),(2100,base_y+40),(2400,base_y+40),(2700,base_y+120),(finish_pos.x,gnd_y_fin),(finish_pos.x+100,gnd_y_fin)]; cgp(gp_section3)
+        cgp([(-100,base_y),(300,base_y),(600,base_y+80),(900,base_y+80)])
+        cgp([(1050,base_y+80),(1100,base_y+20),(1400,base_y+30),(1600,base_y+100)])
+        cgp([(1750,base_y+100),(2100,base_y+40),(2400,base_y+40),(2700,base_y+120),(finish_pos.x,gnd_y_fin),(finish_pos.x+100,gnd_y_fin)])
         create_box(space,pymunk.Vec2d(750,base_y+105),(40,40),mass=4,color=theme_color); create_dynamic_circle(space,pymunk.Vec2d(1250,base_y+80),25,mass=5,color=theme_color); create_box(space,pymunk.Vec2d(1950,base_y+65),(70,30),mass=7,color=theme_color); create_box(space,pymunk.Vec2d(2500,base_y+150),(50,50),mass=6,color=theme_color); create_dynamic_circle(space,pymunk.Vec2d(2200,base_y+80),20,mass=4,color=RED)
-    elif level_index == 3: # Tricky
-        theme_color=PURPLE
-        start_pos=pymunk.Vec2d(100,base_y+spawn_height_offset-20)
-        finish_pos=pymunk.Vec2d(3400,base_y+20)
-        gnd_y_fin=finish_pos.y+ground_at_finish_offset
+    elif level_index == 3:
+        theme_color=PURPLE;start_pos=pymunk.Vec2d(100,base_y+spawn_height_offset-20);finish_pos=pymunk.Vec2d(3400,base_y+20);gnd_y_fin=finish_pos.y+ground_at_finish_offset
         gp=[(-100,base_y),(200,base_y),(350,base_y-40),(500,base_y-40),(650,base_y+60),(800,base_y+60),(900,base_y+10),(1200,base_y+10),(1400,base_y-30),(1700,base_y-30),(1900,base_y+70),(2100,base_y+80),(2200,base_y),(2500,base_y),(2700,base_y-50),(3100,base_y-50),(finish_pos.x,gnd_y_fin),(finish_pos.x+100,gnd_y_fin)]
-        cgp(gp)
-        create_box(space,pymunk.Vec2d(425,base_y-30),(100,20),mass=None,angle=-20,color=theme_color)
-        create_box(space, pymunk.Vec2d(1050, base_y + 40), (20, 73), mass=None, color=theme_color)
-        create_box(space,pymunk.Vec2d(1800,base_y+5),(80,80),mass=15,color=theme_color)
-        create_box(space,pymunk.Vec2d(2350,base_y+50),(100,100),mass=20,color=theme_color)
-        create_dynamic_circle(space,pymunk.Vec2d(2850,base_y+30),30,mass=8,color=theme_color)
-
-    elif level_index == 4: # Bridge/Jump Focus - BRIDGE SUPPORTS ADDED
+        cgp(gp); create_box(space,pymunk.Vec2d(425,base_y-30),(100,20),mass=None,angle=-20,color=theme_color); create_box(space, pymunk.Vec2d(1050, base_y + 35), (20, 70), mass=None, color=theme_color); create_box(space,pymunk.Vec2d(1800,base_y+5),(80,80),mass=15,color=theme_color); create_box(space,pymunk.Vec2d(2350,base_y+50),(100,100),mass=20,color=theme_color); create_dynamic_circle(space,pymunk.Vec2d(2850,base_y+30),30,mass=8,color=theme_color)
+    elif level_index == 4:
         theme_color=RED;start_pos=pymunk.Vec2d(100,base_y+spawn_height_offset+30);finish_pos=pymunk.Vec2d(3600,base_y+70);gnd_y_fin=finish_pos.y+ground_at_finish_offset
-        gap_width = 200
-        bridge_plank_width = 190
-        plank_height = 15
-        support_ledge_width = 28 # How wide the static supports are
-
-        # Y-levels for the top surface of the static platforms forming the gap edges
-        platform1_top_y = base_y + 100
-        platform2_top_y = base_y + 120
-
-        # Ground Section 1: Before first gap
-        gp1 = [(-100, base_y + 40), (600 - support_ledge_width/2, platform1_top_y)] # End just before support
-        cgp(gp1)
-        create_box(space, pymunk.Vec2d(600, platform1_top_y - plank_height/2 -1 ), (support_ledge_width, plank_height+2), mass=None, color=DARK_GREEN) # Support 1A
-
-        # Ground Section 2: Between gaps
-        gp2_start_x = 600 + gap_width
-        gp2 = [(gp2_start_x + support_ledge_width/2, platform1_top_y), # Start just after support
-               (1200, base_y + 60), (1500, base_y + 60),
-               (1700 - support_ledge_width/2, platform2_top_y)] # End just before support
-        cgp(gp2)
-        create_box(space, pymunk.Vec2d(gp2_start_x, platform1_top_y - plank_height/2 -1), (support_ledge_width, plank_height+2), mass=None, color=DARK_GREEN) # Support 1B
-        create_box(space, pymunk.Vec2d(1700, platform2_top_y - plank_height/2 -1), (support_ledge_width, plank_height+2), mass=None, color=DARK_GREEN) # Support 2A
-
-
-        # Ground Section 3: After second gap to finish
-        gp3_start_x = 1700 + gap_width
-        gp3 = [(gp3_start_x + support_ledge_width/2, platform2_top_y), # Start just after support
-               (2400, base_y + 80), (2700, base_y + 80), (2900, base_y + 100),
-               (3200, base_y + 100), (finish_pos.x, gnd_y_fin), (finish_pos.x + 100, gnd_y_fin)]
-        cgp(gp3)
-        create_box(space, pymunk.Vec2d(gp3_start_x, platform2_top_y - plank_height/2 -1), (support_ledge_width, plank_height+2), mass=None, color=DARK_GREEN) # Support 2B
-
-
-        # Bridge Planks - Y position needs to be ON TOP of where supports end.
-        # Supports are at platform_top_y. Planks are plank_height tall.
-        # So plank center Y should be platform_top_y + plank_height/2
-        plank_center_y1 = platform1_top_y + plank_height / 2
-        plank_center_y2 = platform2_top_y + plank_height / 2
-
-        create_box(space, pymunk.Vec2d(600 + gap_width / 2, plank_center_y1), (bridge_plank_width, plank_height), mass=10, color=theme_color)
-        create_box(space, pymunk.Vec2d(600 + gap_width / 2, plank_center_y1 + plank_height / 2 + 10 / 2), (20, 10), mass=1, color=ORANGE)
-
-        create_box(space, pymunk.Vec2d(1700 + gap_width / 2, plank_center_y2), (bridge_plank_width, plank_height), mass=10, color=theme_color)
-
-        create_dynamic_circle(space, pymunk.Vec2d(1600, base_y + 200), 30, mass=8, color=PURPLE)
-        create_box(space, pymunk.Vec2d(1900 + 50, platform2_top_y + 15), (30, 30), mass=3, color=ORANGE)
-        create_dynamic_circle(space, pymunk.Vec2d(2850, base_y + 150), 40, mass=12, color=ORANGE)
-        create_box(space, pymunk.Vec2d(3100, base_y + 125), (60, 60), mass=12, color=theme_color)
-
-
-    elif level_index == 5: # Varied - RED BOX HEIGHT REDUCED
+        gap_width=200;bridge_plank_width=190;plank_height=15;support_ledge_width=28;platform1_top_y=base_y+100;platform2_top_y=base_y+120
+        cgp([(-100,base_y+40),(600-support_ledge_width/2,platform1_top_y)]);create_box(space,pymunk.Vec2d(600,platform1_top_y-plank_height/2-1),(support_ledge_width,plank_height+2),mass=None,color=DARK_GREEN)
+        gp2_start_x=600+gap_width;cgp([(gp2_start_x+support_ledge_width/2,platform1_top_y),(1200,base_y+60),(1500,base_y+60),(1700-support_ledge_width/2,platform2_top_y)]);create_box(space,pymunk.Vec2d(gp2_start_x,platform1_top_y-plank_height/2-1),(support_ledge_width,plank_height+2),mass=None,color=DARK_GREEN);create_box(space,pymunk.Vec2d(1700,platform2_top_y-plank_height/2-1),(support_ledge_width,plank_height+2),mass=None,color=DARK_GREEN)
+        gp3_start_x=1700+gap_width;cgp([(gp3_start_x+support_ledge_width/2,platform2_top_y),(2400,base_y+80),(2700,base_y+80),(2900,base_y+100),(3200,base_y+100),(finish_pos.x,gnd_y_fin),(finish_pos.x+100,gnd_y_fin)]);create_box(space,pymunk.Vec2d(gp3_start_x,platform2_top_y-plank_height/2-1),(support_ledge_width,plank_height+2),mass=None,color=DARK_GREEN)
+        plank_center_y1=platform1_top_y+plank_height/2;plank_center_y2=platform2_top_y+plank_height/2
+        create_box(space,pymunk.Vec2d(600+gap_width/2,plank_center_y1),(bridge_plank_width,plank_height),mass=10,color=theme_color);create_box(space,pymunk.Vec2d(600+gap_width/2,plank_center_y1+plank_height/2+10/2),(20,10),mass=1,color=ORANGE)
+        create_box(space,pymunk.Vec2d(1700+gap_width/2,plank_center_y2),(bridge_plank_width,plank_height),mass=10,color=theme_color)
+        create_dynamic_circle(space,pymunk.Vec2d(1600,base_y+200),30,mass=8,color=PURPLE);create_box(space,pymunk.Vec2d(1900+50,platform2_top_y+15),(30,30),mass=3,color=ORANGE);create_dynamic_circle(space,pymunk.Vec2d(2850,base_y+150),40,mass=12,color=ORANGE);create_box(space,pymunk.Vec2d(3100,base_y+125),(60,60),mass=12,color=theme_color)
+    elif level_index == 5:
         theme_color=DARK_GREEN;lvl5_base_y=200;start_pos=pymunk.Vec2d(100,lvl5_base_y+spawn_height_offset);finish_pos=pymunk.Vec2d(4200,lvl5_base_y+100);gnd_y_fin=finish_pos.y+ground_at_finish_offset
         path=[(-100,lvl5_base_y)];cx,cy=-100,lvl5_base_y;min_y_allowed=lvl5_base_y-50
-        sections_data=[(random.randint(550,700),random.randint(15,30)), (random.randint(450,600),random.randint(-30,-15)),
-                       (random.randint(650,800),random.randint(40,60)), (random.randint(550,700),random.randint(-25,-10)),
-                       (random.randint(750,900),random.randint(50,70)), (random.randint(650,800),random.randint(10,25))]
-        for i, (dx,dy_change) in enumerate(sections_data): cx+=dx;target_y=cy+dy_change;cy=max(min_y_allowed,target_y);path.append((cx,cy))
-        last_generated_x, last_generated_y = path[-1]; path.append((last_generated_x + 300, last_generated_y))
-        path.append((finish_pos.x - 200, gnd_y_fin)); path.append((finish_pos.x, gnd_y_fin)); path.append((finish_pos.x + 200, gnd_y_fin))
-        cgp(path,color=DARK_GREEN)
-        create_box(space,pymunk.Vec2d(path[1][0]+200,path[1][1]+25),(100,40),mass=12,color=PURPLE)
-        create_dynamic_circle(space,pymunk.Vec2d(path[2][0]+300,path[2][1]+34),34,mass=10,color=ORANGE)
-        create_box(space,pymunk.Vec2d(path[4][0]+100,path[4][1]+15),(120,20),mass=7,angle=-5,color=PURPLE)
-        static_box_segment_start_x=path[5][0];static_box_segment_start_y=path[5][1]
-        create_box(space,pymunk.Vec2d(static_box_segment_start_x+150,static_box_segment_start_y+33),(70,80),mass=None,color=DARK_RED) # Reduced height to 75
-        create_dynamic_circle(space,pymunk.Vec2d(path[6][0]+200,path[6][1]+30),30,mass=7,color=ORANGE)
+        sections_data=[(random.randint(550,700),random.randint(15,30)),(random.randint(450,600),random.randint(-30,-15)),(random.randint(650,800),random.randint(40,60)),(random.randint(550,700),random.randint(-25,-10)),(random.randint(750,900),random.randint(50,70)),(random.randint(650,800),random.randint(10,25))]
+        for i,(dx,dy_change) in enumerate(sections_data):cx+=dx;target_y=cy+dy_change;cy=max(min_y_allowed,target_y);path.append((cx,cy))
+        last_generated_x,last_generated_y=path[-1];path.append((last_generated_x+300,last_generated_y));path.append((finish_pos.x-200,gnd_y_fin));path.append((finish_pos.x,gnd_y_fin));path.append((finish_pos.x+200,gnd_y_fin));cgp(path,color=DARK_GREEN)
+        create_box(space,pymunk.Vec2d(path[1][0]+200,path[1][1]+25),(100,40),mass=12,color=PURPLE);create_dynamic_circle(space,pymunk.Vec2d(path[2][0]+300,path[2][1]+34),34,mass=10,color=ORANGE);create_box(space,pymunk.Vec2d(path[4][0]+100,path[4][1]+15),(120,20),mass=7,angle=-5,color=PURPLE)
+        static_box_segment_start_x=path[5][0];static_box_segment_start_y=path[5][1];create_box(space,pymunk.Vec2d(static_box_segment_start_x+150,static_box_segment_start_y+40),(70,80),mass=None,color=DARK_RED);create_dynamic_circle(space,pymunk.Vec2d(path[6][0]+200,path[6][1]+30),30,mass=7,color=ORANGE)
+    elif level_index == 6:
+        # Level 6: Extended, more vertical, but with stairs and obstacles for fun and a possible finish!
+        start_pos = pymunk.Vec2d(100, base_y + spawn_height_offset - 20)
+        finish_ramp_base_x = 2100
+        finish_ramp_base_y = base_y + 400
+        finish_pos = pymunk.Vec2d(finish_ramp_base_x + 250, finish_ramp_base_y + 120)
+        gnd_y_fin = finish_pos.y + ground_at_finish_offset
 
+        # Start ground and first stairs
+        cgp([(-100, base_y), (300, base_y)])
+        create_stairs(space, pymunk.Vec2d(300, base_y), 55, 18, 7, 1, color=GRAY)
+        # Flat after stairs
+        stairs_top_x = 300 + 55 * 7
+        stairs_top_y = base_y + 18 * 7
+        cgp([(stairs_top_x, stairs_top_y), (stairs_top_x + 200, stairs_top_y)])
 
-    elif level_index == 6: # Stairs
-        start_pos=pymunk.Vec2d(100,base_y+spawn_height_offset-20);platform1_y=base_y+160;platform2_y=platform1_y+150
-        finish_pos=pymunk.Vec2d(1800,platform2_y+30);gnd_y_fin=finish_pos.y+ground_at_finish_offset
-        cgp([(-100,base_y),(300,base_y)]);create_stairs(space,pymunk.Vec2d(300,base_y),normal_stair_width,20,8,1,color=GRAY)
-        cgp([(300+normal_stair_width*8,platform1_y),(1000,platform1_y)]);create_stairs(space,pymunk.Vec2d(1000,platform1_y),normal_stair_width-5,25,6,1,color=GRAY)
-        cgp([(1000+(normal_stair_width-5)*6,platform2_y),(finish_pos.x,gnd_y_fin),(finish_pos.x+200,gnd_y_fin)])
-        create_box(space,pymunk.Vec2d(850,platform1_y+30),(40,40),mass=5,color=ORANGE)
+        # First ramp up
+        ramp1_top_x = stairs_top_x + 400
+        ramp1_top_y = stairs_top_y + 100
+        cgp([(stairs_top_x + 200, stairs_top_y), (ramp1_top_x, ramp1_top_y)])
 
-    elif level_index == 7: # Elevators - higher travel & faster
+        # Place a box obstacle on the ramp
+        create_box(space, pymunk.Vec2d(stairs_top_x + 320, stairs_top_y + 60), (40, 40), mass=5, color=PURPLE)
+
+        # Second stairs, steeper
+        stairs2_base_x = ramp1_top_x
+        stairs2_base_y = ramp1_top_y
+        create_stairs(space, pymunk.Vec2d(stairs2_base_x, stairs2_base_y), 50, 22, 6, 1, color=GRAY)
+        stairs2_top_x = stairs2_base_x + 50 * 6
+        stairs2_top_y = stairs2_base_y + 22 * 6
+
+        # Flat after second stairs
+        cgp([(stairs2_top_x, stairs2_top_y), (stairs2_top_x + 120, stairs2_top_y)])
+
+        # Place a rolling ball obstacle
+        create_dynamic_circle(space, pymunk.Vec2d(stairs2_top_x + 60, stairs2_top_y + 40), 22, mass=4, color=ORANGE)
+
+        # Final steep ramp to finish
+        cgp([(stairs2_top_x + 120, stairs2_top_y), (finish_ramp_base_x, finish_ramp_base_y)])
+        # Place a rubber ledge at the base of the final ramp for grip
+        create_box(space, pymunk.Vec2d(finish_ramp_base_x - 30, finish_ramp_base_y + 10), (60, 20), mass=None, color=RUBBER, friction=RUBBER_FRICTION, elasticity=RUBBER_ELASTICITY)
+
+        # Final climb to finish
+        cgp([(finish_ramp_base_x, finish_ramp_base_y), (finish_pos.x, finish_pos.y)])
+        # End ground
+        cgp([(finish_pos.x, finish_pos.y), (finish_pos.x + 200, finish_pos.y)])
+
+    elif level_index == 7:
         start_pos=pymunk.Vec2d(100,base_y+spawn_height_offset-20);finish_pos=pymunk.Vec2d(2500,base_y+150);gnd_y_fin=finish_pos.y+ground_at_finish_offset
         cgp([(-100,base_y),(400,base_y)])
-        create_kinematic_platform(space,pymunk.Vec2d(500,base_y),(150,20),170,60)
-        elevated_y1=base_y+170;cgp([(700,elevated_y1),(1000,elevated_y1)]);cgp([(1150,elevated_y1-40),(1500,elevated_y1-40)])
+        create_kinematic_platform(space,pymunk.Vec2d(500,base_y),(150,20),
+                                  vertical_travel=170, vertical_speed=60)
+        elevated_y1=base_y+170;cgp([(700,elevated_y1),(1000,elevated_y1)]);
+        cgp([(1150,elevated_y1-40),(1500,elevated_y1-40)])
         second_elevator_start_y=elevated_y1-40;second_elevator_travel=gnd_y_fin-second_elevator_start_y+60
-        create_kinematic_platform(space,pymunk.Vec2d(1600,second_elevator_start_y),(120,20),second_elevator_travel,55)
+        create_kinematic_platform(space,pymunk.Vec2d(1600,second_elevator_start_y),(120,20),
+                                  vertical_travel=second_elevator_travel, vertical_speed=55)
         cgp([(1800,gnd_y_fin),(finish_pos.x,gnd_y_fin),(finish_pos.x+200,gnd_y_fin)])
         create_dynamic_circle(space,pymunk.Vec2d(850,elevated_y1+30),20,mass=3,color=RED)
 
-    elif level_index == 8: # Ice and Jumps - REVISED ENDING
-        start_pos=pymunk.Vec2d(100,base_y+spawn_height_offset)
-        finish_y_climb = base_y + 180 # Make finish higher for a climb
-        finish_pos=pymunk.Vec2d(3200, finish_y_climb)
-        gnd_y_fin=finish_pos.y+ground_at_finish_offset
+    elif level_index == 8:
+        start_pos=pymunk.Vec2d(100,base_y+spawn_height_offset);finish_y_climb=base_y+180;finish_pos=pymunk.Vec2d(3200,finish_y_climb);gnd_y_fin=finish_pos.y+ground_at_finish_offset
+        cgp([(-100,base_y),(300,base_y)]);cgp([(300,base_y),(600,base_y+80)],friction=ICE_FRICTION,color=ICE_BLUE);cgp([(600,base_y+80),(900,base_y+80)],friction=ICE_FRICTION,color=ICE_BLUE);create_box(space,pymunk.Vec2d(750,base_y+80+25),(40,40),mass=5,color=ORANGE,friction=0.3);cgp([(900,base_y+80),(1000,base_y+100)],friction=ICE_FRICTION,color=ICE_BLUE)
+        # Introduce rubber ledge/platform
+        create_box(
+            space,
+            pymunk.Vec2d(1035, base_y+92),
+            (70, 20),
+            mass=None,
+            color=RUBBER,
+            friction=RUBBER_FRICTION,
+            elasticity=RUBBER_ELASTICITY
+        )
+        cgp([(1200,base_y+70),(1400,base_y+60)],friction=ICE_FRICTION,color=ICE_BLUE);cgp([(1400,base_y+60),(1800,base_y+60)],friction=ICE_FRICTION,color=ICE_BLUE);cgp([(1800,base_y+60),(1900,base_y+40)]);cgp([(2050,base_y+40),(2300,base_y+40)])
+        climb_start_x=2300;climb_start_y=base_y+40;climb_mid_x=climb_start_x+400;climb_mid_y=climb_start_y+80;finish_approach_x=finish_pos.x-200
+        cgp([(climb_start_x,climb_start_y),(climb_mid_x,climb_mid_y)]);cgp([(climb_mid_x,climb_mid_y),(finish_approach_x,gnd_y_fin)]);cgp([(finish_approach_x,gnd_y_fin),(finish_pos.x,gnd_y_fin),(finish_pos.x+200,gnd_y_fin)])
 
-        cgp([(-100,base_y),(300,base_y)]);cgp([(300,base_y),(600,base_y+80)],friction=ICE_FRICTION,color=ICE_BLUE);cgp([(600,base_y+80),(900,base_y+80)],friction=ICE_FRICTION,color=ICE_BLUE)
-        create_box(space,pymunk.Vec2d(750,base_y+80+25),(40,40),mass=5,color=ORANGE,friction=0.3);cgp([(900,base_y+80),(1000,base_y+100)],friction=ICE_FRICTION,color=ICE_BLUE)
-        cgp([(1200,base_y+70),(1400,base_y+60)],friction=ICE_FRICTION,color=ICE_BLUE);cgp([(1400,base_y+60),(1800,base_y+60)],friction=ICE_FRICTION,color=ICE_BLUE)
-        cgp([(1800,base_y+60),(1900,base_y+40)]);cgp([(2050,base_y+40),(2300,base_y+40)])
-        # Start the climb
-        climb_start_x = 2300; climb_start_y = base_y + 40
-        climb_mid_x = climb_start_x + 400; climb_mid_y = climb_start_y + 80 # Mid-point of climb
-        finish_approach_x = finish_pos.x - 200 # Start of flat section before finish
-        cgp([(climb_start_x, climb_start_y), (climb_mid_x, climb_mid_y)]) # First part of climb
-        cgp([(climb_mid_x, climb_mid_y), (finish_approach_x, gnd_y_fin)]) # Second part of climb to finish height
-        cgp([(finish_approach_x, gnd_y_fin), (finish_pos.x, gnd_y_fin), (finish_pos.x + 200, gnd_y_fin)]) # Flat to finish
-
-    elif level_index == 9: # Arctic Expedition
-        start_pos=pymunk.Vec2d(100,base_y+spawn_height_offset);finish_pos=pymunk.Vec2d(3800,base_y+180);gnd_y_fin=finish_pos.y+ground_at_finish_offset
-        cgp([(-100,base_y),(400,base_y)])
-        create_stairs(space,pymunk.Vec2d(400,base_y),icy_stair_width,15,5,1,color=ICE_BLUE,friction=ICE_FRICTION,elasticity=ICE_ELASTICITY)
-        plat1_y=base_y+15*5; cgp([(400+icy_stair_width*5,plat1_y),(900,plat1_y)])
-        cgp([(900,plat1_y),(1100,plat1_y-20)],friction=ICE_FRICTION,color=ICE_BLUE)
-        cgp([(1250,plat1_y-40),(1500,plat1_y-40)],friction=ICE_FRICTION,color=ICE_BLUE)
-        chasm_floor_y=base_y-100
+    elif level_index == 9:
+        start_pos=pymunk.Vec2d(100,base_y+spawn_height_offset);finish_pos=pymunk.Vec2d(3800,base_y+180);gnd_y_fin=finish_pos.y+ground_at_finish_offset;cgp([(-100,base_y),(400,base_y)])
+        create_stairs(space,pymunk.Vec2d(400,base_y),icy_stair_width,15,5,1,color=ICE_BLUE,friction=ICE_FRICTION,elasticity=ICE_ELASTICITY);plat1_y=base_y+15*5;cgp([(400+icy_stair_width*5,plat1_y),(900,plat1_y)])
+        cgp([(900,plat1_y),(1100,plat1_y-20)],friction=ICE_FRICTION,color=ICE_BLUE);cgp([(1250,plat1_y-40),(1500,plat1_y-40)],friction=ICE_FRICTION,color=ICE_BLUE);chasm_floor_y=base_y-100
         create_static_segment(space,(1500,plat1_y-40),(1500,chasm_floor_y),color=ICE_BLUE[:3]);create_static_segment(space,(1800,plat1_y-40),(1800,chasm_floor_y),color=ICE_BLUE[:3]);create_static_segment(space,(1500,chasm_floor_y),(1800,chasm_floor_y),friction=ICE_FRICTION,color=ICE_BLUE)
-        create_kinematic_platform(space,pymunk.Vec2d(1600,plat1_y-40+10),(150,20),110,60)
+        create_kinematic_platform(space,pymunk.Vec2d(1600,plat1_y-40+10),(150,20),
+                                  vertical_travel=110, vertical_speed=60)
         cgp([(1800,plat1_y-40),(2100,plat1_y-40)])
         current_x,current_y=2100,plat1_y-40
-        for i in range(3):
-            cgp([(current_x,current_y),(current_x+150,current_y+10)],friction=ICE_FRICTION,color=ICE_BLUE);current_x+=150+100;current_y+=10-5
-            cgp([(current_x,current_y),(current_x+50,current_y)],friction=ICE_FRICTION,color=ICE_BLUE);current_x+=50
+        for i in range(3):cgp([(current_x,current_y),(current_x+150,current_y+10)],friction=ICE_FRICTION,color=ICE_BLUE);current_x+=150+100;current_y+=10-5;cgp([(current_x,current_y),(current_x+50,current_y)],friction=ICE_FRICTION,color=ICE_BLUE);current_x+=50
         cgp([(current_x,current_y),(current_x+300,gnd_y_fin-20)]);cgp([(current_x+300,gnd_y_fin-20),(finish_pos.x,gnd_y_fin),(finish_pos.x+200,gnd_y_fin)])
 
-    else: # Placeholder
-        ln=level_index-9;start_pos=pymunk.Vec2d(100,base_y+spawn_height_offset);finish_y_val=base_y+(ln%3)*40+40;finish_pos=pymunk.Vec2d(1500+ln*200,finish_y_val);gnd_y_fin=finish_pos.y+ground_at_finish_offset
+    elif level_index == 10: # The Gauntlet
+        start_pos = pymunk.Vec2d(100, base_y + spawn_height_offset)
+        cursor_x, cursor_y = -150, base_y + 40  # Raised ground at start for variety
+        finish_pos = pymunk.Vec2d(6800, base_y + 280); gnd_y_fin = finish_pos.y + ground_at_finish_offset
+        cgp([ (cursor_x, cursor_y), (200, cursor_y) ]); cursor_x, cursor_y = 200, cursor_y
+        cgp([ (cursor_x, cursor_y), (cursor_x+250, cursor_y+70) ], friction=ICE_FRICTION, color=ICE_BLUE); cursor_x+=250; cursor_y+=70
+        cgp([ (cursor_x, cursor_y), (cursor_x+300, cursor_y) ], friction=ICE_FRICTION, color=ICE_BLUE); create_box(space,pymunk.Vec2d(cursor_x+150,cursor_y+25),(40,40),mass=6,color=ORANGE,friction=0.4); cursor_x+=300
+        cgp([ (cursor_x, cursor_y), (cursor_x+100, cursor_y+20) ], friction=ICE_FRICTION, color=ICE_BLUE); cursor_x+=100; cursor_y+=20
+        gap_land_x=cursor_x+150; cgp([ (gap_land_x,cursor_y-10),(gap_land_x+150,cursor_y-10) ], friction=ICE_FRICTION, color=ICE_BLUE); cursor_x=gap_land_x+150; cursor_y-=10
+        cgp([ (cursor_x,cursor_y),(cursor_x+100,cursor_y) ]); cursor_x+=100
+        normal_stairs_y_end=cursor_y+normal_stair_width*0.3*5; create_stairs(space,pymunk.Vec2d(cursor_x,cursor_y),normal_stair_width,20,5,1,color=GRAY); cursor_x+=normal_stair_width*5; cursor_y=normal_stairs_y_end
+        cgp([ (cursor_x,cursor_y),(cursor_x+150,cursor_y) ]); cursor_x+=150
+        ice_bridge_y=cursor_y+10; ice_bridge_gap_start_x=cursor_x; ice_bridge_gap_len=280
+        ice_bridge_plank_width=ice_bridge_gap_len+40  # Increased width
+        # Rubber support ledges under the ice bridge
+        create_box(
+            space,
+            pymunk.Vec2d(ice_bridge_gap_start_x+10,ice_bridge_y-10),
+            (20,20),
+            mass=None,
+            color=RUBBER,
+            friction=RUBBER_FRICTION,
+            elasticity=RUBBER_ELASTICITY
+        )
+        create_box(
+            space,
+            pymunk.Vec2d(ice_bridge_gap_start_x+ice_bridge_gap_len+10,ice_bridge_y-10),
+            (20,20),
+            mass=None,
+            color=RUBBER,
+            friction=RUBBER_FRICTION,
+            elasticity=RUBBER_ELASTICITY
+        )
+        create_box(space,pymunk.Vec2d(ice_bridge_gap_start_x+ice_bridge_gap_len/2,ice_bridge_y),(ice_bridge_plank_width,20),mass=15,friction=0.3,color=ICE_BLUE)
+        cursor_x+=ice_bridge_gap_len+20; cgp([ (cursor_x,ice_bridge_y-10),(cursor_x+200,cursor_y-20) ]); cursor_x+=200; cursor_y-=20
+        bridge_section_y_base=cursor_y+80; cgp([ (cursor_x,cursor_y),(cursor_x+100,bridge_section_y_base) ]); cursor_x+=100
+        num_v_platforms=5; v_platform_width=120; v_platform_spacing=200; v_travel_height=100; v_platform_speed=55
+        for i in range(num_v_platforms):
+            platform_center_x=cursor_x+i*v_platform_spacing+v_platform_width/2
+            initial_y_offset=(i%2)*(v_travel_height/2.5); initial_speed_direction=1 if i%2==0 else -1
+            create_kinematic_platform(
+                space,
+                pymunk.Vec2d(platform_center_x,bridge_section_y_base-initial_y_offset),
+                (v_platform_width,20),
+                vertical_travel=v_travel_height,
+                vertical_speed=v_platform_speed*initial_speed_direction,
+                horizontal_travel=0,
+                horizontal_speed=0,
+                color=PLATFORM_BLUE
+            )
+        cursor_x+=num_v_platforms*v_platform_spacing; cgp([ (cursor_x,bridge_section_y_base),(cursor_x+150,cursor_y+20) ]); cursor_x+=150; cursor_y+=20
+        cgp([ (cursor_x,cursor_y),(cursor_x+300,cursor_y) ]); cursor_x+=300
+        create_box(space,pymunk.Vec2d(cursor_x+75,cursor_y+50),(150,30),mass=None,angle=20); create_box(space,pymunk.Vec2d(cursor_x+75,cursor_y+100),(30,80),mass=10,color=PURPLE); cursor_x+=150
+        cgp([ (cursor_x,cursor_y),(cursor_x+200,cursor_y-40) ],friction=ICE_FRICTION,color=ICE_BLUE); cursor_x+=200; cursor_y-=40
+        cgp([ (cursor_x,cursor_y),(cursor_x+50,cursor_y+60),(cursor_x+100,cursor_y+60),(cursor_x+150,cursor_y) ],friction=ICE_FRICTION,color=ICE_BLUE)
+        create_dynamic_circle(space,pymunk.Vec2d(cursor_x+75,cursor_y+100),20,mass=4,color=RED); create_dynamic_circle(space,pymunk.Vec2d(cursor_x+75,cursor_y+130),15,mass=2,color=RED); cursor_x+=150
+        cgp([ (cursor_x,cursor_y),(cursor_x+400,cursor_y+30) ]); cursor_x+=400; cursor_y+=30
+        cgp([ (cursor_x,cursor_y),(cursor_x+250,cursor_y) ]); create_box(space,pymunk.Vec2d(cursor_x+70,cursor_y+30),(60,60),mass=30,color=ORANGE); create_box(space,pymunk.Vec2d(cursor_x+200,cursor_y-15),(30,30),mass=None,color=DARK_GREEN); cursor_x+=250
+        push_block_gap_start_x = cursor_x; push_block_gap_len = 80
+        cgp([ (push_block_gap_start_x + push_block_gap_len, cursor_y), (push_block_gap_start_x + push_block_gap_len + 200, cursor_y) ]); cursor_x = push_block_gap_start_x + push_block_gap_len + 200
+        cgp([ (cursor_x,cursor_y),(cursor_x+300,cursor_y) ]); create_box(space,pymunk.Vec2d(cursor_x+100,cursor_y+45),(20,70),mass=None,color=PURPLE); create_box(space,pymunk.Vec2d(cursor_x+200,cursor_y-45),(20,70),mass=None,color=PURPLE,angle=10); cursor_x+=300
+        final_climb_start_y=cursor_y; cgp([ (cursor_x,cursor_y),(cursor_x+300,cursor_y+50) ]); cursor_x+=300; cursor_y+=50
+        cgp([ (cursor_x,cursor_y),(cursor_x+400,cursor_y+80) ],friction=ICE_FRICTION,color=ICE_BLUE); cursor_x+=400; cursor_y+=80
+        create_box(space,pymunk.Vec2d(cursor_x-50,cursor_y+40),(30,80),mass=None,color=PURPLE)
+        cgp([ (cursor_x,cursor_y),(cursor_x+300,gnd_y_fin-10) ]); cursor_x+=300; cursor_y=gnd_y_fin-10
+        cgp([ (cursor_x,cursor_y),(finish_pos.x,gnd_y_fin),(finish_pos.x+200,gnd_y_fin) ])
+
+    else: # Placeholder for levels > 10
+        ln=level_index-10;start_pos=pymunk.Vec2d(100,base_y+spawn_height_offset);finish_y_val=base_y+(ln%3)*40+40;finish_pos=pymunk.Vec2d(1500+ln*200,finish_y_val);gnd_y_fin=finish_pos.y+ground_at_finish_offset
         path=[(-100,base_y)];cx=-100
         for _ in range(3+ln%2):cx+=random.randint(400,600);path.append((cx,base_y+random.randint(-20,30)))
         path.append((finish_pos.x,gnd_y_fin));path.append((finish_pos.x+100,gnd_y_fin));cgp(path)
@@ -372,7 +428,7 @@ def load_level(space, level_index):
 def main():
     pygame.init(); screen=pygame.display.set_mode((SW,SH)); pygame.display.set_caption("Jelly Truck Adventures - Level Up!"); clock=pygame.time.Clock()
     font=pygame.font.Font(None,36);small_font=pygame.font.Font(None,24); space=pymunk.Space();space.gravity=GRAVITY
-    current_level=1; max_level=9; truck=Truck(space,pymunk.Vec2d(150,250))
+    current_level=8; max_level=10; truck=Truck(space,pymunk.Vec2d(150,250))
     level_finished=False;game_over=False;level_start_time=time.time();level_time_taken=0;level_complete_flag=[False]
     bg_elements=[{'y_on_screen_top':0,'height_on_screen':int(SH*.6),'color':SKY_HORIZON_BLUE,'scroll_x':BG_DISTANT_SCROLL_X,'scroll_y':.01}, {'y_on_screen_top':int(SH*.5),'height_on_screen':int(SH*.3),'color':HILL_GREEN_FAR,'scroll_x':BG_MID_SCROLL_X,'scroll_y':BG_MID_SCROLL_Y}, {'y_on_screen_top':int(SH*.7),'height_on_screen':int(SH*.3),'color':HILL_GREEN_NEAR,'scroll_x':BG_NEAR_SCROLL_X,'scroll_y':BG_NEAR_SCROLL_Y}]
     clouds=[];[clouds.append([random.randint(-SW,SW*2),random.randint(int(SH*.1),int(SH*.4)),random.randint(20,40),random.randint(15,35),random.randint(10,30)]) for _ in range(10)]
