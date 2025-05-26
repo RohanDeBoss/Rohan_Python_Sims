@@ -5,7 +5,8 @@ import sys
 import time
 import random
 
-# (Constants and Truck class remain the same as your previous version)
+# Jelly Pytruck
+
 # --- Constants ---
 SCREEN_WIDTH = 1000
 SCREEN_HEIGHT = 600
@@ -34,7 +35,7 @@ OBSTACLE_FRICTION = 0.5; OBSTACLE_ELASTICITY = 0.5
 ICE_FRICTION = 0.1
 ICE_ELASTICITY = 0.1
 RUBBER_FRICTION = 2.5  # New: very high friction
-RUBBER_ELASTICITY = 0.2
+RUBBER_ELASTICITY = 0.3
 
 # Control Forces / Motor Parameters
 MOTOR_TARGET_RATE_FORWARD = 26; MOTOR_TARGET_RATE_BACKWARD = -26
@@ -61,7 +62,7 @@ SH = SCREEN_HEIGHT; SW = SCREEN_WIDTH
 kinematic_platforms_data = []
 
 
-class Truck: # (Same as before)
+class Truck:
     def __init__(self, space, pos):
         self.space = space
         self.chassis_dims = (71, 30)
@@ -119,7 +120,7 @@ class Truck: # (Same as before)
             sp_end_w=wb.local_to_world((self.wheel_radius*0.9,0));sp_esx,sp_esy=int(sp_end_w.x-co.x),int(SH-(sp_end_w.y-co.y))
             pygame.draw.line(screen,WHITE,(sx,sy),(sp_esx,sp_esy),2)
 
-# (Helper functions create_static_segment, create_box, create_dynamic_circle, create_finish_line, create_kinematic_platform are same)
+# (Helper functions create_static_segment, create_box, create_dynamic_circle, create_finish_line, create_kinematic_platform)
 def create_static_segment(space,p1,p2,thickness=6,friction=GROUND_FRICTION,elasticity=GROUND_ELASTICITY,collision_type=COLLISION_TYPE_GROUND,color=DARK_GREEN):
     shape=pymunk.Segment(space.static_body,p1,p2,thickness/2.0);shape.friction=friction;shape.elasticity=elasticity;shape.collision_type=collision_type;shape.color=color;space.add(shape);return shape
 def create_box(space,pos,size,mass=None,angle=0,friction=OBSTACLE_FRICTION,elasticity=OBSTACLE_ELASTICITY,collision_type=COLLISION_TYPE_OBSTACLE,color=ORANGE,radius=0.5):
@@ -197,8 +198,6 @@ def clear_level(space,truck):
         if body in space.bodies:space.remove(body)
     for s in list(space.static_body.shapes):
         if s in space.shapes:space.remove(s)
-
-# (Constants and Truck class, other helper functions, main loop remain the same as your previous version)
 
 # --- LEVEL DESIGNS ---
 def load_level(space, level_index):
@@ -380,9 +379,18 @@ def load_level(space, level_index):
             elasticity=RUBBER_ELASTICITY
         )
         create_box(space,pymunk.Vec2d(ice_bridge_gap_start_x+ice_bridge_gap_len/2,ice_bridge_y),(ice_bridge_plank_width,20),mass=15,friction=0.3,color=ICE_BLUE)
-        cursor_x+=ice_bridge_gap_len+20; cgp([ (cursor_x,ice_bridge_y-10),(cursor_x+200,cursor_y-20) ]); cursor_x+=200; cursor_y-=20
-        bridge_section_y_base=cursor_y+80; cgp([ (cursor_x,cursor_y),(cursor_x+100,bridge_section_y_base) ]); cursor_x+=100
-        num_v_platforms=5; v_platform_width=120; v_platform_spacing=200; v_travel_height=100; v_platform_speed=55
+        cursor_x+=ice_bridge_gap_len+20; cgp([ (cursor_x,ice_bridge_y-10),(cursor_x+300,cursor_y-10) ]); cursor_x+=300  # More gradual slope
+        
+        # Make elevator section easier
+        bridge_section_y_base=cursor_y+40  # Lower height difference
+        cgp([ (cursor_x,cursor_y),(cursor_x+200,bridge_section_y_base) ]); cursor_x+=200  # Longer, more gradual ramp
+        
+        # Adjust elevator platforms to be easier
+        num_v_platforms=4  # Fewer platforms
+        v_platform_width=150  # Wider platforms
+        v_platform_spacing=180  # Closer together
+        v_travel_height=60  # Less vertical movement
+        v_platform_speed=40  # Slower speed
         for i in range(num_v_platforms):
             platform_center_x=cursor_x+i*v_platform_spacing+v_platform_width/2
             initial_y_offset=(i%2)*(v_travel_height/2.5); initial_speed_direction=1 if i%2==0 else -1
@@ -400,6 +408,16 @@ def load_level(space, level_index):
         cgp([ (cursor_x,cursor_y),(cursor_x+300,cursor_y) ]); cursor_x+=300
         create_box(space,pymunk.Vec2d(cursor_x+75,cursor_y+50),(150,30),mass=None,angle=20); create_box(space,pymunk.Vec2d(cursor_x+75,cursor_y+100),(30,80),mass=10,color=PURPLE); cursor_x+=150
         cgp([ (cursor_x,cursor_y),(cursor_x+200,cursor_y-40) ],friction=ICE_FRICTION,color=ICE_BLUE); cursor_x+=200; cursor_y-=40
+        # The Gauntlet level - modify the icy slope after the ice bridge
+        cursor_x+=ice_bridge_gap_len+20
+        # Make slope more gradual
+        cgp([ (cursor_x,ice_bridge_y-10),(cursor_x+400,cursor_y-5) ],friction=ICE_FRICTION,color=ICE_BLUE)
+        cursor_x+=400; cursor_y-=5  # Gentler descent
+        
+        # Adjust the balls section to match new height
+        cgp([ (cursor_x,cursor_y),(cursor_x+50,cursor_y+40),(cursor_x+100,cursor_y+40),(cursor_x+150,cursor_y) ],friction=ICE_FRICTION,color=ICE_BLUE)
+        create_dynamic_circle(space,pymunk.Vec2d(cursor_x+75,cursor_y+80),20,mass=4,color=RED)
+        create_dynamic_circle(space,pymunk.Vec2d(cursor_x+75,cursor_y+110),15,mass=2,color=RED)
         cgp([ (cursor_x,cursor_y),(cursor_x+50,cursor_y+60),(cursor_x+100,cursor_y+60),(cursor_x+150,cursor_y) ],friction=ICE_FRICTION,color=ICE_BLUE)
         create_dynamic_circle(space,pymunk.Vec2d(cursor_x+75,cursor_y+100),20,mass=4,color=RED); create_dynamic_circle(space,pymunk.Vec2d(cursor_x+75,cursor_y+130),15,mass=2,color=RED); cursor_x+=150
         cgp([ (cursor_x,cursor_y),(cursor_x+400,cursor_y+30) ]); cursor_x+=400; cursor_y+=30
@@ -428,7 +446,7 @@ def load_level(space, level_index):
 def main():
     pygame.init(); screen=pygame.display.set_mode((SW,SH)); pygame.display.set_caption("Jelly Truck Adventures - Level Up!"); clock=pygame.time.Clock()
     font=pygame.font.Font(None,36);small_font=pygame.font.Font(None,24); space=pymunk.Space();space.gravity=GRAVITY
-    current_level=8; max_level=10; truck=Truck(space,pymunk.Vec2d(150,250))
+    current_level=1; max_level=10; truck=Truck(space,pymunk.Vec2d(150,250))
     level_finished=False;game_over=False;level_start_time=time.time();level_time_taken=0;level_complete_flag=[False]
     bg_elements=[{'y_on_screen_top':0,'height_on_screen':int(SH*.6),'color':SKY_HORIZON_BLUE,'scroll_x':BG_DISTANT_SCROLL_X,'scroll_y':.01}, {'y_on_screen_top':int(SH*.5),'height_on_screen':int(SH*.3),'color':HILL_GREEN_FAR,'scroll_x':BG_MID_SCROLL_X,'scroll_y':BG_MID_SCROLL_Y}, {'y_on_screen_top':int(SH*.7),'height_on_screen':int(SH*.3),'color':HILL_GREEN_NEAR,'scroll_x':BG_NEAR_SCROLL_X,'scroll_y':BG_NEAR_SCROLL_Y}]
     clouds=[];[clouds.append([random.randint(-SW,SW*2),random.randint(int(SH*.1),int(SH*.4)),random.randint(20,40),random.randint(15,35),random.randint(10,30)]) for _ in range(10)]
