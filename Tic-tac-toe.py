@@ -42,7 +42,7 @@ tt_hits = 0
 tt_stores = 0
 
 # --- Bitboard Zobrist Hashing ---
-ZOBRIST_BITBOARD_TABLE = {} 
+ZOBRIST_BITBOARD_TABLE = {}
 
 # --- Bitboard Winning Masks Cache ---
 WINNING_MASKS_CACHE = {}
@@ -52,15 +52,15 @@ POTENTIAL_LINE_MASKS_CACHE = {}
 def to_algebraic(row, col, board_size): # RESTORED
     if not (0 <= row < board_size and 0 <= col < board_size): return "Invalid"
     file_char = chr(ord('a') + col)
-    rank_char = str(board_size - row) 
+    rank_char = str(board_size - row)
     return f"{file_char}{rank_char}"
 
 # --- Bitboard Utilities ---
-@functools.lru_cache(maxsize=128) 
+@functools.lru_cache(maxsize=128)
 def cell_to_bit_index(r, c, board_size):
     return r * board_size + c
 
-@functools.lru_cache(maxsize=128) 
+@functools.lru_cache(maxsize=128)
 def bit_index_to_cell(bit_index, board_size):
     return divmod(bit_index, board_size)
 
@@ -79,7 +79,7 @@ def list_to_bitboards(list_board, board_size):
 def init_zobrist_bitboard(board_size):
     global ZOBRIST_BITBOARD_TABLE
     ZOBRIST_BITBOARD_TABLE.clear()
-    random.seed(42) 
+    random.seed(42)
     num_cells = board_size * board_size
     for i in range(num_cells):
         ZOBRIST_BITBOARD_TABLE[(i, PLAYER_IDS[PLAYER_HUMAN])] = random.getrandbits(64)
@@ -116,7 +116,7 @@ def _generate_masks_for_k(board_size, k_to_win):
             for i in range(k_to_win):
                 mask |= (1 << cell_to_bit_index(r + i, c - i, board_size))
             masks.append(mask)
-    return list(set(masks)) 
+    return list(set(masks))
 
 def get_win_masks(board_size, k_to_win):
     if (board_size, k_to_win) not in WINNING_MASKS_CACHE:
@@ -179,40 +179,60 @@ def compute_zobrist_hash_from_canonical_bbs(canonical_x_bb, canonical_o_bb):
         bb >>= 1; idx += 1
     return h
 
-# --- Symmetry for Bitboards ---
-def _bitboard_to_grid(bb, board_size):
-    grid = [[0] * board_size for _ in range(board_size)]
-    for r in range(board_size):
-        for c in range(board_size):
-            if bb & (1 << cell_to_bit_index(r, c, board_size)): grid[r][c] = 1
-    return grid
+# --- OPTIMIZED: Pure Bitboard Transformations ---
+def _rotate_bitboard_90_cw(bb, board_size):
+    new_bb = 0
+    # Iterate over set bits only for efficiency
+    temp_bb = bb
+    while temp_bb > 0:
+        # Find the index of the least significant bit (LSB)
+        lsb_mask = temp_bb & -temp_bb  # Isolates the LSB
+        idx = lsb_mask.bit_length() - 1 # Gets its index (0-based)
 
-def _grid_to_bitboard(grid, board_size):
-    bb = 0
-    for r in range(board_size):
-        for c in range(board_size):
-            if grid[r][c] == 1: bb |= (1 << cell_to_bit_index(r, c, board_size))
-    return bb
+        r, c = bit_index_to_cell(idx, board_size) # Cached call
+        # For 90 deg clockwise: new_r = c, new_c = board_size - 1 - r
+        new_idx = cell_to_bit_index(c, board_size - 1 - r, board_size) # Cached call
+        new_bb |= (1 << new_idx)
 
-def _rotate_grid(grid):
-    n = len(grid); new_grid = [[0] * n for _ in range(n)]
-    for r in range(n):
-        for c in range(n): new_grid[c][n - 1 - r] = grid[r][c]
-    return new_grid
+        temp_bb ^= lsb_mask # Clear the LSB from temp_bb to process the next one
+    return new_bb
 
-def _reflect_grid(grid): return [row[::-1] for row in grid]
+def _reflect_bitboard_horizontal(bb, board_size):
+    new_bb = 0
+    temp_bb = bb
+    while temp_bb > 0:
+        lsb_mask = temp_bb & -temp_bb
+        idx = lsb_mask.bit_length() - 1
+        r, c = bit_index_to_cell(idx, board_size) # Cached call
+        # For horizontal reflection: new_r = r, new_c = board_size - 1 - c
+        new_idx = cell_to_bit_index(r, board_size - 1 - c, board_size) # Cached call
+        new_bb |= (1 << new_idx)
+        temp_bb ^= lsb_mask
+    return new_bb
 
-@functools.lru_cache(maxsize=8192)
+# --- OPTIMIZED: Symmetry for Bitboards (using pure bitboard ops) ---
+@functools.lru_cache(maxsize=8192) # Cache size can be tuned
 def get_canonical_bitboards(player_x_bb, player_o_bb, board_size):
     symmetries = []
-    current_x_grid = _bitboard_to_grid(player_x_bb, board_size)
-    current_o_grid = _bitboard_to_grid(player_o_bb, board_size)
-    for _ in range(4):
-        symmetries.append((_grid_to_bitboard(current_x_grid, board_size), _grid_to_bitboard(current_o_grid, board_size)))
-        reflected_x_grid = _reflect_grid(current_x_grid); reflected_o_grid = _reflect_grid(current_o_grid)
-        symmetries.append((_grid_to_bitboard(reflected_x_grid, board_size), _grid_to_bitboard(reflected_o_grid, board_size)))
-        current_x_grid = _rotate_grid(current_x_grid); current_o_grid = _rotate_grid(current_o_grid)
-    return min(symmetries)
+
+    current_x_bb = player_x_bb
+    current_o_bb = player_o_bb
+
+    for _ in range(4): # Iterate through 4 rotations
+        # Add current orientation
+        symmetries.append((current_x_bb, current_o_bb))
+
+        # Add reflected version of current orientation
+        reflected_x_bb = _reflect_bitboard_horizontal(current_x_bb, board_size)
+        reflected_o_bb = _reflect_bitboard_horizontal(current_o_bb, board_size)
+        symmetries.append((reflected_x_bb, reflected_o_bb))
+
+        # Rotate for next iteration (if not the last one)
+        if _ < 3: # No need to rotate after the 3rd rotation (which gives the 4th state)
+            current_x_bb = _rotate_bitboard_90_cw(current_x_bb, board_size)
+            current_o_bb = _rotate_bitboard_90_cw(current_o_bb, board_size)
+
+    return min(symmetries) # min() compares tuples element by element (first by x_bb, then by o_bb)
 
 # --- AI Helper Functions (Bitboard based) ---
 def get_available_moves_bb(player_x_bb, player_o_bb, board_size, center_sort=True):
@@ -265,7 +285,7 @@ def can_force_win_on_next_player_turn_bb(player_x_bb, player_o_bb, current_playe
             if opponent_player_id == PLAYER_IDS[PLAYER_HUMAN]: next_x_bb_after_mopp |= mopp_bit
             else: next_o_bb_after_mopp |= mopp_bit
             opponent_bb_after_mopp = next_x_bb_after_mopp if opponent_player_id == PLAYER_IDS[PLAYER_HUMAN] else next_o_bb_after_mopp
-            if check_win_bb(opponent_bb_after_mopp, board_size, k_to_win): m1_is_forcing = False; break 
+            if check_win_bb(opponent_bb_after_mopp, board_size, k_to_win): m1_is_forcing = False; break
             if not _get_immediate_winning_moves_bb(next_x_bb_after_mopp, next_o_bb_after_mopp, current_player_id, k_to_win, board_size): m1_is_forcing = False; break
         if m1_is_forcing: return True
     return False
@@ -319,7 +339,7 @@ def _minimax_recursive_logic_bb(canonical_x_bb, canonical_o_bb, depth, is_maximi
             else:
                 null_window_score, child_nodes_null, child_max_depth_null = _minimax_recursive_logic_bb(child_canonical_x_bb, child_canonical_o_bb, depth + 1, False, k_to_win, board_size, alpha, alpha + 1, current_max_search_depth_for_this_call, child_hash)
                 child_nodes_iter += child_nodes_null; child_max_depth_iter = max(child_max_depth_iter, child_max_depth_null)
-                if null_window_score > alpha and null_window_score < beta: 
+                if null_window_score > alpha and null_window_score < beta:
                     current_eval_score, child_nodes_re, child_max_depth_re = _minimax_recursive_logic_bb(child_canonical_x_bb, child_canonical_o_bb, depth + 1, False, k_to_win, board_size, alpha, beta, current_max_search_depth_for_this_call, child_hash)
                     child_nodes_iter += child_nodes_re; child_max_depth_iter = max(child_max_depth_iter, child_max_depth_re)
                 else: current_eval_score = null_window_score
@@ -423,8 +443,8 @@ def find_best_move_iterative_deepening(initial_board_list, k_to_win_config, prog
             overall_best_move_idx = current_iter_best_move_idx_candidate; overall_best_score = current_iter_best_score_candidate
             final_iddfs_ply_limit_for_best_move = current_iddfs_ply_limit
             if (is_maximizing_search and current_iter_best_score_candidate >= (1000 - (current_iddfs_ply_limit -1))) or (not is_maximizing_search and current_iter_best_score_candidate <= (-1000 + (current_iddfs_ply_limit -1))): break
-        if abs(overall_best_score) > 990 and overall_best_move_idx is not None: break
-    if overall_best_move_idx is None and root_available_moves_indices:
+        if abs(overall_best_score) > 990 and overall_best_move_idx is not None: break # Found a winning/losing line
+    if overall_best_move_idx is None and root_available_moves_indices: # Should only happen if all moves lead to same score (e.g. 0 for draw) or only one move
         overall_best_move_idx = root_available_moves_indices[0]; overall_best_score = move_scores_from_last_iter.get(overall_best_move_idx, (-math.inf if is_maximizing_search else math.inf))
         found_fallback_details = next((item for item in last_iter_full_eval_details_rc if item['move'] == bit_index_to_cell(overall_best_move_idx, current_board_size)), None)
         if found_fallback_details: final_iddfs_ply_limit_for_best_move = found_fallback_details.get('depth', 1)
@@ -433,14 +453,14 @@ def find_best_move_iterative_deepening(initial_board_list, k_to_win_config, prog
     final_top_moves_list_rc = []
     if last_iter_full_eval_details_rc:
         last_iter_full_eval_details_rc.sort(key=lambda x: x['score'], reverse=is_maximizing_search)
-        final_top_moves_list_rc = last_iter_full_eval_details_rc[:5]
-    elif final_best_move_rc:
+        final_top_moves_list_rc = last_iter_full_eval_details_rc[:5] # Top 5 moves
+    elif final_best_move_rc: # Should only happen if search was extremely short (e.g. immediate win)
         final_top_moves_list_rc = [{'move': final_best_move_rc, 'score': overall_best_score, 'nodes': 1, 'depth': final_iddfs_ply_limit_for_best_move, 'actual_eval_depth': final_iddfs_ply_limit_for_best_move}]
     result_q.put({'best_move_data': (final_best_move_rc, overall_best_score), 'top_moves_list': final_top_moves_list_rc, 'total_nodes': accumulated_total_nodes, 'achieved_relative_depth': final_iddfs_ply_limit_for_best_move})
 
 # --- Tkinter GUI Class ---
 class TicTacToeGUI: # Structure largely unchanged, AI call points are the main interface change
-    TOP_MOVES_DISPLAY_LINES = 6 
+    TOP_MOVES_DISPLAY_LINES = 6
     def __init__(self, root_window):
         self.root = root_window; self.root.title("Tic-Tac-Toe AI"); self.root.configure(bg=COLOR_ROOT_BG)
         try: self.default_font_family = tkfont.nametofont("TkDefaultFont").actual()["family"]
@@ -470,11 +490,11 @@ class TicTacToeGUI: # Structure largely unchanged, AI call points are the main i
         self.style.configure("TFrame", background=COLOR_ROOT_BG); self.style.configure("Content.TFrame", background=COLOR_FRAME_BG)
         self.style.configure("TLabel", background=COLOR_ROOT_BG, foreground=COLOR_TEXT_PRIMARY, font=self.fonts["label"], padding=2)
         self.style.configure("Header.TLabel", font=self.fonts["header"], foreground=COLOR_ACCENT_SECONDARY, background=COLOR_FRAME_BG)
-        self.style.configure("Status.TLabel", font=self.fonts["status"], foreground=COLOR_TEXT_PRIMARY, background=COLOR_FRAME_BG) 
+        self.style.configure("Status.TLabel", font=self.fonts["status"], foreground=COLOR_TEXT_PRIMARY, background=COLOR_FRAME_BG)
         self.style.configure("Info.TLabel", font=self.fonts["info"], foreground=COLOR_TEXT_SECONDARY, background=COLOR_FRAME_BG)
         self.style.configure("InfoValue.TLabel", font=self.fonts["info_value"], foreground=COLOR_TEXT_PRIMARY, background=COLOR_FRAME_BG)
         self.style.configure("DetailedProgress.TLabel", font=self.fonts["info"], foreground=COLOR_TEXT_SECONDARY, background=COLOR_FRAME_BG, anchor=tk.W)
-        self.style.configure("HintSuggest.TLabel", font=self.fonts["status"], foreground=COLOR_HINT_TEXT, background=COLOR_HINT_SUGGEST_BG, padding=5, borderwidth=1, relief="solid", bordercolor=COLOR_HINT) 
+        self.style.configure("HintSuggest.TLabel", font=self.fonts["status"], foreground=COLOR_HINT_TEXT, background=COLOR_HINT_SUGGEST_BG, padding=5, borderwidth=1, relief="solid", bordercolor=COLOR_HINT)
         self.style.configure("TopMoveInfo.TLabel", font=self.fonts["top_move_info"], background=COLOR_FRAME_BG, foreground=COLOR_TEXT_PRIMARY, padding=5, borderwidth=1, relief="groove", bordercolor="#CCCCCC")
         self.style.configure("TButton", font=self.fonts["button"], padding=(8, 5), borderwidth=1)
         self.style.map("TButton", relief=[('pressed', 'sunken'), ('!pressed', 'raised')], foreground=[('disabled', COLOR_TEXT_SECONDARY)], background=[('disabled', "#E0E0E0")])
@@ -534,7 +554,7 @@ class TicTacToeGUI: # Structure largely unchanged, AI call points are the main i
         except ValueError: messagebox.showerror("Error", "Invalid input for N or K."); return
         total_cells = self.board_size * self.board_size; self.max_game_length_var.set(f"{total_cells} plies"); self.current_turn_max_searchable_depth = total_cells
         self.game_board = [[EMPTY_CELL for _ in range(self.board_size)] for _ in range(self.board_size)]; self.num_moves_made = 0; self.current_player = PLAYER_HUMAN if human_starts else PLAYER_AI; self.game_over = False
-        self._set_status_normal(f"{self.board_size}x{self.board_size}, {self.k_to_win}-in-a-row. {'Your turn (X).' if human_starts else 'AI`s turn (O).'}"); self.ai_eval_var.set("N/A"); self.nodes_explored_var.set("0"); 
+        self._set_status_normal(f"{self.board_size}x{self.board_size}, {self.k_to_win}-in-a-row. {'Your turn (X).' if human_starts else 'AI`s turn (O).'}"); self.ai_eval_var.set("N/A"); self.nodes_explored_var.set("0");
         self.actual_depth_var.set(f"0/{self.current_turn_max_searchable_depth}")
         self.time_taken_var.set("N/A"); self.nps_var.set("N/A"); self.progress_percent_var.set("Calculating..."); self.detailed_progress_var.set(""); self.top_moves_var.set(self._get_empty_top_moves_text())
         if self.progress_bar.master.winfo_ismapped(): self.progress_bar.master.grid_remove()
@@ -617,8 +637,8 @@ class TicTacToeGUI: # Structure largely unchanged, AI call points are the main i
             if latest_best_score_so_far is not None:
                 score_val = latest_best_score_so_far; score_str = ""
                 if isinstance(score_val, (int, float)) and score_val not in (math.inf, -math.inf): score_str = f"{score_val:.0f}?"
-                elif isinstance(score_val, str): score_str = score_val 
-                else: score_str = "Win/Loss?" 
+                elif isinstance(score_val, str): score_str = score_val
+                else: score_str = "Win/Loss?"
                 self.ai_eval_var.set(score_str)
             if latest_iddfs_current_iter_depth is not None and latest_iddfs_max_target_depth is not None:
                 target_plies_for_progress_calc = max(1, latest_iddfs_max_target_depth); current_iter_depth_disp = latest_iddfs_current_iter_depth
@@ -634,7 +654,7 @@ class TicTacToeGUI: # Structure largely unchanged, AI call points are the main i
                 overall_percentage = min(100.0, max(0.0, (eff_completed_depth_iterations / target_plies_for_progress_calc) * 100))
                 self.progress_percent_var.set(f"{overall_percentage:.0f}%")
         if is_calculating: self.root.after(update_interval_ms, self.check_ai_progress)
-        elif self.calculation_manager_thread: 
+        elif self.calculation_manager_thread:
             final_runtime = time.monotonic() - self.ai_start_time
             if time.monotonic() - self.last_time_taken_update > 0.001: self.time_taken_var.set(f"{final_runtime:.3f}")
             last_nodes, last_best_score = latest_nodes, latest_best_score_so_far
@@ -657,7 +677,7 @@ class TicTacToeGUI: # Structure largely unchanged, AI call points are the main i
         except ValueError: time_taken_calc = time.monotonic() - self.ai_start_time; self.time_taken_var.set(f"{time_taken_calc:.3f}")
         was_hint = (self._current_calculation_for_player == PLAYER_HUMAN)
         try:
-            res = self.result_queue.get_nowait(); move, score = res['best_move_data']; top_moves = res['top_moves_list']; nodes = res['total_nodes']; achieved_relative_depth = res.get('achieved_relative_depth', 0) 
+            res = self.result_queue.get_nowait(); move, score = res['best_move_data']; top_moves = res['top_moves_list']; nodes = res['total_nodes']; achieved_relative_depth = res.get('achieved_relative_depth', 0)
         except thread_queue.Empty: self._set_status_normal("Error: No result from AI."); self.enable_board_buttons(); self.update_hint_button_state(); return
         self.nodes_explored_var.set(f"{nodes:,}"); self.nps_var.set(f"{(nodes / time_taken_calc):,.0f}" if time_taken_calc > 1e-4 else ("High" if nodes > 0 else "0"))
         self.actual_depth_var.set(f"{achieved_relative_depth}/{self.current_turn_max_searchable_depth}")
