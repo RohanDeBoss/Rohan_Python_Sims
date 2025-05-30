@@ -49,7 +49,7 @@ WINNING_MASKS_CACHE = {}
 POTENTIAL_LINE_MASKS_CACHE = {}
 
 # --- Coordinate Conversion ---
-def to_algebraic(row, col, board_size): # RESTORED
+def to_algebraic(row, col, board_size):
     if not (0 <= row < board_size and 0 <= col < board_size): return "Invalid"
     file_char = chr(ord('a') + col)
     rank_char = str(board_size - row)
@@ -130,7 +130,7 @@ def get_potential_line_masks(board_size, k_to_win):
 
 
 # --- Game Logic (Core - GUI related or Bitboard based) ---
-def get_winning_line(board, player, k_to_win): # RESTORED - For GUI highlighting, uses list[list]
+def get_winning_line(board, player, k_to_win):
     n = len(board)
     # Horizontal
     for r_idx in range(n):
@@ -179,22 +179,17 @@ def compute_zobrist_hash_from_canonical_bbs(canonical_x_bb, canonical_o_bb):
         bb >>= 1; idx += 1
     return h
 
-# --- OPTIMIZED: Pure Bitboard Transformations ---
+# --- Pure Bitboard Transformations ---
 def _rotate_bitboard_90_cw(bb, board_size):
     new_bb = 0
-    # Iterate over set bits only for efficiency
     temp_bb = bb
     while temp_bb > 0:
-        # Find the index of the least significant bit (LSB)
-        lsb_mask = temp_bb & -temp_bb  # Isolates the LSB
-        idx = lsb_mask.bit_length() - 1 # Gets its index (0-based)
-
-        r, c = bit_index_to_cell(idx, board_size) # Cached call
-        # For 90 deg clockwise: new_r = c, new_c = board_size - 1 - r
-        new_idx = cell_to_bit_index(c, board_size - 1 - r, board_size) # Cached call
+        lsb_mask = temp_bb & -temp_bb
+        idx = lsb_mask.bit_length() - 1
+        r, c = bit_index_to_cell(idx, board_size)
+        new_idx = cell_to_bit_index(c, board_size - 1 - r, board_size)
         new_bb |= (1 << new_idx)
-
-        temp_bb ^= lsb_mask # Clear the LSB from temp_bb to process the next one
+        temp_bb ^= lsb_mask
     return new_bb
 
 def _reflect_bitboard_horizontal(bb, board_size):
@@ -203,36 +198,27 @@ def _reflect_bitboard_horizontal(bb, board_size):
     while temp_bb > 0:
         lsb_mask = temp_bb & -temp_bb
         idx = lsb_mask.bit_length() - 1
-        r, c = bit_index_to_cell(idx, board_size) # Cached call
-        # For horizontal reflection: new_r = r, new_c = board_size - 1 - c
-        new_idx = cell_to_bit_index(r, board_size - 1 - c, board_size) # Cached call
+        r, c = bit_index_to_cell(idx, board_size)
+        new_idx = cell_to_bit_index(r, board_size - 1 - c, board_size)
         new_bb |= (1 << new_idx)
         temp_bb ^= lsb_mask
     return new_bb
 
-# --- OPTIMIZED: Symmetry for Bitboards (using pure bitboard ops) ---
-@functools.lru_cache(maxsize=8192) # Cache size can be tuned
+# --- Symmetry for Bitboards (using pure bitboard ops) ---
+@functools.lru_cache(maxsize=8192)
 def get_canonical_bitboards(player_x_bb, player_o_bb, board_size):
     symmetries = []
-
     current_x_bb = player_x_bb
     current_o_bb = player_o_bb
-
-    for _ in range(4): # Iterate through 4 rotations
-        # Add current orientation
+    for _ in range(4):
         symmetries.append((current_x_bb, current_o_bb))
-
-        # Add reflected version of current orientation
         reflected_x_bb = _reflect_bitboard_horizontal(current_x_bb, board_size)
         reflected_o_bb = _reflect_bitboard_horizontal(current_o_bb, board_size)
         symmetries.append((reflected_x_bb, reflected_o_bb))
-
-        # Rotate for next iteration (if not the last one)
-        if _ < 3: # No need to rotate after the 3rd rotation (which gives the 4th state)
+        if _ < 3:
             current_x_bb = _rotate_bitboard_90_cw(current_x_bb, board_size)
             current_o_bb = _rotate_bitboard_90_cw(current_o_bb, board_size)
-
-    return min(symmetries) # min() compares tuples element by element (first by x_bb, then by o_bb)
+    return min(symmetries)
 
 # --- AI Helper Functions (Bitboard based) ---
 def get_available_moves_bb(player_x_bb, player_o_bb, board_size, center_sort=True):
@@ -246,14 +232,38 @@ def get_available_moves_bb(player_x_bb, player_o_bb, board_size, center_sort=Tru
         available_moves_indices.sort(key=sort_key)
     return available_moves_indices
 
+# --- OPTIMIZED _get_immediate_winning_moves_bb ---
 @functools.lru_cache(maxsize=16384)
 def _get_immediate_winning_moves_bb(player_x_bb, player_o_bb, current_player_id, k_to_win, board_size):
     winning_moves_indices = []
-    player_bb_to_update = player_x_bb if current_player_id == PLAYER_IDS[PLAYER_HUMAN] else player_o_bb
-    available_indices = get_available_moves_bb(player_x_bb, player_o_bb, board_size, center_sort=False)
-    for move_idx in available_indices:
-        move_bit = 1 << move_idx; temp_player_bb = player_bb_to_update | move_bit
-        if check_win_bb(temp_player_bb, board_size, k_to_win): winning_moves_indices.append(move_idx)
+    
+    current_player_bb = player_x_bb if current_player_id == PLAYER_IDS[PLAYER_HUMAN] else player_o_bb
+    opponent_player_bb = player_o_bb if current_player_id == PLAYER_IDS[PLAYER_HUMAN] else player_x_bb
+    
+    occupied_bb = player_x_bb | player_o_bb
+    win_masks = get_win_masks(board_size, k_to_win) # Cached call
+
+    for mask in win_masks:
+        # 1. Check if the opponent already blocks this potential winning line
+        if (mask & opponent_player_bb) != 0:
+            continue 
+
+        # 2. Find which pieces the current player still needs to place in this line to win
+        #    These are bits in the win_mask that are not yet set in current_player_bb.
+        needed_for_win_mask = mask & ~current_player_bb
+        
+        # 3. Check if exactly one piece is needed to complete the line
+        #    (i.e., needed_for_win_mask has only one bit set - it's a power of 2)
+        if needed_for_win_mask != 0 and (needed_for_win_mask & (needed_for_win_mask - 1)) == 0:
+            move_bit = needed_for_win_mask # This is the single bit (piece) needed
+            
+            # 4. Crucially, check if the cell for this 'move_bit' is actually empty
+            if (move_bit & occupied_bb) == 0: 
+                move_idx = move_bit.bit_length() - 1 # Get the 0-based index of the bit
+                # Avoid adding duplicates if a rare move completes multiple lines
+                if move_idx not in winning_moves_indices: 
+                    winning_moves_indices.append(move_idx)
+                    
     return winning_moves_indices
 
 @functools.lru_cache(maxsize=4096)
@@ -273,21 +283,32 @@ def can_force_win_on_next_player_turn_bb(player_x_bb, player_o_bb, current_playe
         if current_player_id == PLAYER_IDS[PLAYER_HUMAN]: next_x_bb_after_m1 |= m1_bit
         else: next_o_bb_after_m1 |= m1_bit
         current_player_bb_after_m1 = next_x_bb_after_m1 if current_player_id == PLAYER_IDS[PLAYER_HUMAN] else next_o_bb_after_m1
-        if check_win_bb(current_player_bb_after_m1, board_size, k_to_win): continue
+        if check_win_bb(current_player_bb_after_m1, board_size, k_to_win): continue # Current player wins with m1, not a "next turn" force
+        
         opponent_moves_after_m1 = get_available_moves_bb(next_x_bb_after_m1, next_o_bb_after_m1, board_size, center_sort=False)
-        if not opponent_moves_after_m1:
-            if _get_immediate_winning_moves_bb(next_x_bb_after_m1, next_o_bb_after_m1, current_player_id, k_to_win, board_size): return True
-            else: continue
+        if not opponent_moves_after_m1: # Opponent has no moves
+            # If current player has an immediate win after m1 (e.g. m1 filled the board, making a line)
+            if _get_immediate_winning_moves_bb(next_x_bb_after_m1, next_o_bb_after_m1, current_player_id, k_to_win, board_size): 
+                return True # m1 forces a win as opponent has no response and current player can win
+            else: 
+                continue # Opponent has no moves, current player cannot win - m1 doesn't force
+        
         m1_is_forcing = True
         for mopp_idx in opponent_moves_after_m1:
             mopp_bit = 1 << mopp_idx
             next_x_bb_after_mopp, next_o_bb_after_mopp = next_x_bb_after_m1, next_o_bb_after_m1
             if opponent_player_id == PLAYER_IDS[PLAYER_HUMAN]: next_x_bb_after_mopp |= mopp_bit
             else: next_o_bb_after_mopp |= mopp_bit
+            
             opponent_bb_after_mopp = next_x_bb_after_mopp if opponent_player_id == PLAYER_IDS[PLAYER_HUMAN] else next_o_bb_after_mopp
-            if check_win_bb(opponent_bb_after_mopp, board_size, k_to_win): m1_is_forcing = False; break
-            if not _get_immediate_winning_moves_bb(next_x_bb_after_mopp, next_o_bb_after_mopp, current_player_id, k_to_win, board_size): m1_is_forcing = False; break
-        if m1_is_forcing: return True
+            if check_win_bb(opponent_bb_after_mopp, board_size, k_to_win): # If opponent wins with their move
+                m1_is_forcing = False; break # Then m1 was not a forcing move
+            
+            # If opponent doesn't win, current player must have an immediate win
+            if not _get_immediate_winning_moves_bb(next_x_bb_after_mopp, next_o_bb_after_mopp, current_player_id, k_to_win, board_size):
+                m1_is_forcing = False; break # Current player cannot immediately win, so m1 not forcing
+        
+        if m1_is_forcing: return True # m1 is forcing if all opponent replies lead to current player's win
     return False
 
 # --- Minimax AI (Bitboard based) ---
@@ -295,6 +316,8 @@ def _minimax_recursive_logic_bb(canonical_x_bb, canonical_o_bb, depth, is_maximi
     global tt_hits, tt_stores
     nodes_here = 1; max_depth_here = depth; original_alpha = alpha
     remaining_depth_tt = current_max_search_depth_for_this_call - depth
+    
+    # Transposition Table Lookup
     if current_zobrist_hash in transposition_table:
         entry = transposition_table[current_zobrist_hash]
         if entry['depth_searched'] >= remaining_depth_tt:
@@ -303,78 +326,127 @@ def _minimax_recursive_logic_bb(canonical_x_bb, canonical_o_bb, depth, is_maximi
             elif entry['flag'] == TT_LOWER_BOUND: alpha = max(alpha, entry['score'])
             elif entry['flag'] == TT_UPPER_BOUND: beta = min(beta, entry['score'])
             if alpha >= beta: return (entry['score'], nodes_here, max_depth_here)
+            
+    # Terminal State Checks
     score_terminal = None
     if check_win_bb(canonical_x_bb, board_size, k_to_win): score_terminal = 1000 - depth
     elif check_win_bb(canonical_o_bb, board_size, k_to_win): score_terminal = -1000 + depth
     elif is_board_full_bb(canonical_x_bb, canonical_o_bb, board_size): score_terminal = 0
     elif is_unwinnable_for_either_bb(canonical_x_bb, canonical_o_bb, k_to_win, board_size): score_terminal = 0
+    
     if score_terminal is not None:
-        transposition_table[current_zobrist_hash] = {'score': score_terminal, 'depth_searched': 99, 'flag': TT_EXACT, 'best_move_idx': None}
+        transposition_table[current_zobrist_hash] = {'score': score_terminal, 'depth_searched': 99, 'flag': TT_EXACT, 'best_move_idx': None} # High depth for terminal
         tt_stores +=1; return (score_terminal, nodes_here, max_depth_here)
-    if depth >= current_max_search_depth_for_this_call: return (0, nodes_here, max_depth_here)
+        
+    # Max Depth Reached (Quiescence or limit)
+    if depth >= current_max_search_depth_for_this_call: return (0, nodes_here, max_depth_here) # Neutral score at depth limit
+    
     current_player_id = PLAYER_IDS[PLAYER_HUMAN] if is_maximizing_for_x else PLAYER_IDS[PLAYER_AI]
-    if (depth + 3) <= current_max_search_depth_for_this_call:
+    
+    # Check for Forced Win (2-ply tactical sequence)
+    # Only check if enough depth is remaining to "see" the 2-ply sequence + current ply.
+    if (depth + 3) <= current_max_search_depth_for_this_call: # (current_depth + P_move + O_move + P_win_move)
         score_forced = 0; is_forced = False
         if can_force_win_on_next_player_turn_bb(canonical_x_bb, canonical_o_bb, current_player_id, k_to_win, board_size):
-            score_forced = (1000 - (depth + 2)) if is_maximizing_for_x else (-1000 + (depth + 2)); is_forced = True
+            # Score reflects win depth: current ply + 1 (player's move) + 1 (opponent's forced reply)
+            score_forced = (1000 - (depth + 2)) if is_maximizing_for_x else (-1000 + (depth + 2))
+            is_forced = True
         if is_forced:
             transposition_table[current_zobrist_hash] = {'score': score_forced, 'depth_searched': 99, 'flag': TT_EXACT, 'best_move_idx': None}
             tt_stores +=1; return (score_forced, nodes_here, max_depth_here)
+            
     available_moves_indices = get_available_moves_bb(canonical_x_bb, canonical_o_bb, board_size, center_sort=True)
-    if not available_moves_indices: return (0, nodes_here, max_depth_here)
-    if current_zobrist_hash in transposition_table:
+    if not available_moves_indices: return (0, nodes_here, max_depth_here) # Draw if no moves but not terminal
+    
+    # Move Ordering: Use TT's best move first
+    if current_zobrist_hash in transposition_table: # Re-check as alpha/beta might have changed
         entry = transposition_table[current_zobrist_hash]
         if entry.get('best_move_idx') is not None:
             best_move_idx_tt = entry['best_move_idx']
-            if best_move_idx_tt in available_moves_indices: available_moves_indices.remove(best_move_idx_tt); available_moves_indices.insert(0, best_move_idx_tt)
+            if best_move_idx_tt in available_moves_indices: 
+                available_moves_indices.remove(best_move_idx_tt)
+                available_moves_indices.insert(0, best_move_idx_tt)
+                
     best_move_idx_this_node = None; eval_to_store = 0
+    
+    # Principal Variation Search (PVS) / NegaScout
     if is_maximizing_for_x:
         max_eval = -math.inf
         for i, move_idx in enumerate(available_moves_indices):
             move_bit = 1 << move_idx; next_x_bb = canonical_x_bb | move_bit; next_o_bb = canonical_o_bb
             child_canonical_x_bb, child_canonical_o_bb = get_canonical_bitboards(next_x_bb, next_o_bb, board_size)
             child_hash = compute_zobrist_hash_from_canonical_bbs(child_canonical_x_bb, child_canonical_o_bb)
-            current_eval_score, child_nodes_iter, child_max_depth_iter = 0,0,0
-            if i == 0: current_eval_score, child_nodes_iter, child_max_depth_iter = _minimax_recursive_logic_bb(child_canonical_x_bb, child_canonical_o_bb, depth + 1, False, k_to_win, board_size, alpha, beta, current_max_search_depth_for_this_call, child_hash)
-            else:
+            
+            current_eval_score = 0; child_nodes_iter = 0; child_max_depth_iter = 0
+            if i == 0: # Full window search for the first move
+                current_eval_score, child_nodes_iter, child_max_depth_iter = _minimax_recursive_logic_bb(child_canonical_x_bb, child_canonical_o_bb, depth + 1, False, k_to_win, board_size, alpha, beta, current_max_search_depth_for_this_call, child_hash)
+            else: # Null window (scout) search for subsequent moves
+                # Search with a tight (null) window around alpha
                 null_window_score, child_nodes_null, child_max_depth_null = _minimax_recursive_logic_bb(child_canonical_x_bb, child_canonical_o_bb, depth + 1, False, k_to_win, board_size, alpha, alpha + 1, current_max_search_depth_for_this_call, child_hash)
                 child_nodes_iter += child_nodes_null; child_max_depth_iter = max(child_max_depth_iter, child_max_depth_null)
-                if null_window_score > alpha and null_window_score < beta:
+                
+                # If scout search failed high (score > alpha) and potentially beats beta, re-search with full window
+                if null_window_score > alpha and null_window_score < beta: 
                     current_eval_score, child_nodes_re, child_max_depth_re = _minimax_recursive_logic_bb(child_canonical_x_bb, child_canonical_o_bb, depth + 1, False, k_to_win, board_size, alpha, beta, current_max_search_depth_for_this_call, child_hash)
-                    child_nodes_iter += child_nodes_re; child_max_depth_iter = max(child_max_depth_iter, child_max_depth_re)
-                else: current_eval_score = null_window_score
+                    child_nodes_iter += child_nodes_re # Accumulate nodes from re-search
+                    child_max_depth_iter = max(child_max_depth_iter, child_max_depth_re)
+                else:
+                    current_eval_score = null_window_score # Use scout score if it didn't warrant a re-search
+                    
             nodes_here += child_nodes_iter; max_depth_here = max(max_depth_here, child_max_depth_iter)
-            if current_eval_score > max_eval: max_eval = current_eval_score; best_move_idx_this_node = move_idx
-            alpha = max(alpha, max_eval);
-            if alpha >= beta: break
+            
+            if current_eval_score > max_eval: 
+                max_eval = current_eval_score
+                best_move_idx_this_node = move_idx
+            alpha = max(alpha, max_eval)
+            if alpha >= beta: break # Beta cutoff
         eval_to_store = max_eval
-    else:
+    else: # Minimizing player (AI 'O')
         min_eval = math.inf
         for i, move_idx in enumerate(available_moves_indices):
             move_bit = 1 << move_idx; next_x_bb = canonical_x_bb; next_o_bb = canonical_o_bb | move_bit
             child_canonical_x_bb, child_canonical_o_bb = get_canonical_bitboards(next_x_bb, next_o_bb, board_size)
             child_hash = compute_zobrist_hash_from_canonical_bbs(child_canonical_x_bb, child_canonical_o_bb)
-            current_eval_score, child_nodes_iter, child_max_depth_iter = 0,0,0
-            if i == 0: current_eval_score, child_nodes_iter, child_max_depth_iter = _minimax_recursive_logic_bb(child_canonical_x_bb, child_canonical_o_bb, depth + 1, True, k_to_win, board_size, alpha, beta, current_max_search_depth_for_this_call, child_hash)
-            else:
+            
+            current_eval_score = 0; child_nodes_iter = 0; child_max_depth_iter = 0
+            if i == 0: # Full window search
+                current_eval_score, child_nodes_iter, child_max_depth_iter = _minimax_recursive_logic_bb(child_canonical_x_bb, child_canonical_o_bb, depth + 1, True, k_to_win, board_size, alpha, beta, current_max_search_depth_for_this_call, child_hash)
+            else: # Null window (scout) search
                 null_window_score, child_nodes_null, child_max_depth_null = _minimax_recursive_logic_bb(child_canonical_x_bb, child_canonical_o_bb, depth + 1, True, k_to_win, board_size, beta - 1, beta, current_max_search_depth_for_this_call, child_hash)
                 child_nodes_iter += child_nodes_null; child_max_depth_iter = max(child_max_depth_iter, child_max_depth_null)
-                if null_window_score < beta and null_window_score > alpha:
+                
+                if null_window_score < beta and null_window_score > alpha: # Re-search if necessary
                     current_eval_score, child_nodes_re, child_max_depth_re = _minimax_recursive_logic_bb(child_canonical_x_bb, child_canonical_o_bb, depth + 1, True, k_to_win, board_size, alpha, beta, current_max_search_depth_for_this_call, child_hash)
-                    child_nodes_iter += child_nodes_re; child_max_depth_iter = max(child_max_depth_iter, child_max_depth_re)
-                else: current_eval_score = null_window_score
+                    child_nodes_iter += child_nodes_re
+                    child_max_depth_iter = max(child_max_depth_iter, child_max_depth_re)
+                else:
+                    current_eval_score = null_window_score
+                    
             nodes_here += child_nodes_iter; max_depth_here = max(max_depth_here, child_max_depth_iter)
-            if current_eval_score < min_eval: min_eval = current_eval_score; best_move_idx_this_node = move_idx
-            beta = min(beta, min_eval);
-            if beta <= alpha: break
+            
+            if current_eval_score < min_eval: 
+                min_eval = current_eval_score
+                best_move_idx_this_node = move_idx
+            beta = min(beta, min_eval)
+            if beta <= alpha: break # Alpha cutoff
         eval_to_store = min_eval
+        
+    # Transposition Table Store
     flag = TT_EXACT
-    if eval_to_store <= original_alpha: flag = TT_UPPER_BOUND
-    elif eval_to_store >= beta: flag = TT_LOWER_BOUND
+    if eval_to_store <= original_alpha: flag = TT_UPPER_BOUND # Failed low
+    elif eval_to_store >= beta: flag = TT_LOWER_BOUND      # Failed high
+    
+    # Store if new entry or deeper search for this state
     current_tt_entry = transposition_table.get(current_zobrist_hash)
     if current_tt_entry is None or remaining_depth_tt >= current_tt_entry['depth_searched']:
-        transposition_table[current_zobrist_hash] = {'score': eval_to_store, 'depth_searched': remaining_depth_tt, 'flag': flag, 'best_move_idx': best_move_idx_this_node}
+        transposition_table[current_zobrist_hash] = {
+            'score': eval_to_store, 
+            'depth_searched': remaining_depth_tt, 
+            'flag': flag, 
+            'best_move_idx': best_move_idx_this_node
+        }
         tt_stores += 1
+        
     return (eval_to_store, nodes_here, max_depth_here)
 
 def minimax_iterative_bb(player_x_bb, player_o_bb, is_turn_of_maximizer_x, k_to_win, board_size, search_ply_limit_from_here):
@@ -397,69 +469,109 @@ def find_best_move_iterative_deepening(initial_board_list, k_to_win_config, prog
     root_available_moves_indices = get_available_moves_bb(initial_x_bb, initial_o_bb, current_board_size, center_sort=True)
     if not root_available_moves_indices:
         result_q.put({'best_move_data': (None, 0), 'top_moves_list': [], 'total_nodes': 0, 'achieved_relative_depth': 0}); return
+    
+    # Check for immediate win for the current player
     immediate_wins_indices = _get_immediate_winning_moves_bb(initial_x_bb, initial_o_bb, player_id_for_move, k_to_win_config, current_board_size)
     if immediate_wins_indices:
-        best_move_idx = immediate_wins_indices[0]; best_move_rc = bit_index_to_cell(best_move_idx, current_board_size); score = (1000 - 0) if is_maximizing_search else (-1000 + 0)
+        best_move_idx = immediate_wins_indices[0] # Take the first one
+        best_move_rc = bit_index_to_cell(best_move_idx, current_board_size)
+        score = (1000 - 0) if is_maximizing_search else (-1000 + 0) # Depth 0 for immediate win
         result_q.put({'best_move_data': (best_move_rc, score), 'top_moves_list': [{'move': best_move_rc, 'score': score, 'nodes': 1, 'depth': 0, 'actual_eval_depth': 0}], 'total_nodes': 1, 'achieved_relative_depth': 0}); return
+        
+    # Check if opponent has a single immediate winning move (must block)
     opponent_id = 1 - player_id_for_move
     opponent_immediate_wins_indices = _get_immediate_winning_moves_bb(initial_x_bb, initial_o_bb, opponent_id, k_to_win_config, current_board_size)
     if opponent_immediate_wins_indices and len(opponent_immediate_wins_indices) == 1:
         must_block_idx = opponent_immediate_wins_indices[0]
-        if must_block_idx in root_available_moves_indices: root_available_moves_indices = [must_block_idx]
+        if must_block_idx in root_available_moves_indices: # Ensure the block is a valid move
+            root_available_moves_indices = [must_block_idx] # Only consider this blocking move
+            
     overall_best_move_idx = None; overall_best_score = -math.inf if is_maximizing_search else math.inf
     move_scores_from_last_iter = {idx: (-math.inf if is_maximizing_search else math.inf) for idx in root_available_moves_indices}
     accumulated_total_nodes = 0; final_iddfs_ply_limit_for_best_move = 0
     last_iter_full_eval_details_rc = []
+
     for current_iddfs_ply_limit in range(1, max_remaining_plies + 1):
         progress_q.put({'total_root_moves_this_iter': len(root_available_moves_indices), 'current_depth_iter': current_iddfs_ply_limit, 'type': 'start_iter', 'max_total_depth_iters': max_remaining_plies })
+        
+        # Sort root moves based on scores from the previous iteration (move ordering)
         if current_iddfs_ply_limit > 1 and len(root_available_moves_indices) > 1:
             root_available_moves_indices.sort(key=lambda idx: move_scores_from_last_iter.get(idx, (-math.inf if is_maximizing_search else math.inf)), reverse=is_maximizing_search)
+            
         current_iter_best_move_idx_candidate = None; current_iter_best_score_candidate = -math.inf if is_maximizing_search else math.inf
         temp_evaluated_this_iter_rc = []
+
         for i, root_move_idx in enumerate(root_available_moves_indices):
             move_rc_for_progress = bit_index_to_cell(root_move_idx, current_board_size)
             current_overall_time_before_eval = time.monotonic() - start_total_time
             nps_so_far_before_eval = accumulated_total_nodes / current_overall_time_before_eval if current_overall_time_before_eval > 0.001 else (accumulated_total_nodes * 1000.0 if accumulated_total_nodes > 0 else 0)
             progress_q.put({'type': 'progress_start_move_eval', 'current_nodes': accumulated_total_nodes, 'current_max_depth': num_moves_made_abs + current_iddfs_ply_limit, 'current_nps': nps_so_far_before_eval, 'time_elapsed': current_overall_time_before_eval, 'current_depth_iter': current_iddfs_ply_limit, 'root_moves_done_this_iter': i, 'total_root_moves_this_iter': len(root_available_moves_indices), 'max_total_depth_iters': max_remaining_plies, 'evaluating_move': move_rc_for_progress})
+            
             root_move_bit = 1 << root_move_idx; child_x_bb, child_o_bb = initial_x_bb, initial_o_bb
             if player_id_for_move == PLAYER_IDS[PLAYER_HUMAN]: child_x_bb |= root_move_bit
             else: child_o_bb |= root_move_bit
-            next_player_is_maximizer_x = (player_id_for_move == PLAYER_IDS[PLAYER_AI])
-            minimax_search_ply_limit_for_children = current_iddfs_ply_limit - 1
+            
+            next_player_is_maximizer_x = (player_id_for_move == PLAYER_IDS[PLAYER_AI]) # Turn flips
+            minimax_search_ply_limit_for_children = current_iddfs_ply_limit - 1 # Search one ply less deep
+            
             eval_score, nodes_in_branch, actual_depth_this_branch_relative = minimax_iterative_bb(child_x_bb, child_o_bb, next_player_is_maximizer_x, k_to_win_config, current_board_size, minimax_search_ply_limit_for_children)
+            
             accumulated_total_nodes += nodes_in_branch
             move_scores_from_last_iter[root_move_idx] = eval_score
             current_move_details_rc = {'move': bit_index_to_cell(root_move_idx, current_board_size), 'score': eval_score, 'nodes': nodes_in_branch, 'depth': current_iddfs_ply_limit, 'actual_eval_depth': actual_depth_this_branch_relative + 1}
             temp_evaluated_this_iter_rc.append(current_move_details_rc)
+            
             if is_maximizing_search:
-                if eval_score > current_iter_best_score_candidate: current_iter_best_score_candidate = eval_score; current_iter_best_move_idx_candidate = root_move_idx
-            else:
-                if eval_score < current_iter_best_score_candidate: current_iter_best_score_candidate = eval_score; current_iter_best_move_idx_candidate = root_move_idx
+                if eval_score > current_iter_best_score_candidate: 
+                    current_iter_best_score_candidate = eval_score
+                    current_iter_best_move_idx_candidate = root_move_idx
+            else: # Minimizing search
+                if eval_score < current_iter_best_score_candidate: 
+                    current_iter_best_score_candidate = eval_score
+                    current_iter_best_move_idx_candidate = root_move_idx
+                    
             current_overall_time = time.monotonic() - start_total_time
             nps_so_far = accumulated_total_nodes / current_overall_time if current_overall_time > 0.001 else (accumulated_total_nodes * 1000.0 if accumulated_total_nodes > 0 else 0)
             progress_q.put({'type': 'progress_end_move_eval', 'current_nodes': accumulated_total_nodes, 'current_max_depth': num_moves_made_abs + current_iddfs_ply_limit, 'current_best_score': current_iter_best_score_candidate if current_iter_best_move_idx_candidate is not None else "...", 'current_nps': nps_so_far, 'time_elapsed': current_overall_time, 'current_depth_iter': current_iddfs_ply_limit, 'root_moves_done_this_iter': i + 1, 'total_root_moves_this_iter': len(root_available_moves_indices), 'max_total_depth_iters': max_remaining_plies})
+        
         last_iter_full_eval_details_rc = temp_evaluated_this_iter_rc
         if current_iter_best_move_idx_candidate is not None:
-            overall_best_move_idx = current_iter_best_move_idx_candidate; overall_best_score = current_iter_best_score_candidate
+            overall_best_move_idx = current_iter_best_move_idx_candidate
+            overall_best_score = current_iter_best_score_candidate
             final_iddfs_ply_limit_for_best_move = current_iddfs_ply_limit
-            if (is_maximizing_search and current_iter_best_score_candidate >= (1000 - (current_iddfs_ply_limit -1))) or (not is_maximizing_search and current_iter_best_score_candidate <= (-1000 + (current_iddfs_ply_limit -1))): break
-        if abs(overall_best_score) > 990 and overall_best_move_idx is not None: break # Found a winning/losing line
-    if overall_best_move_idx is None and root_available_moves_indices: # Should only happen if all moves lead to same score (e.g. 0 for draw) or only one move
-        overall_best_move_idx = root_available_moves_indices[0]; overall_best_score = move_scores_from_last_iter.get(overall_best_move_idx, (-math.inf if is_maximizing_search else math.inf))
+            
+            # Early exit if a mate is found (score reflects win/loss at this depth)
+            # The score for a win at depth `d` is `1000 - d`. Here, `current_iddfs_ply_limit - 1` is the depth of the child node.
+            if (is_maximizing_search and current_iter_best_score_candidate >= (1000 - (current_iddfs_ply_limit -1))) or \
+               (not is_maximizing_search and current_iter_best_score_candidate <= (-1000 + (current_iddfs_ply_limit -1))):
+                break 
+        
+        # Another early exit condition if a strong win/loss is found (close to max score)
+        if abs(overall_best_score) > 990 and overall_best_move_idx is not None: 
+            break
+
+    if overall_best_move_idx is None and root_available_moves_indices:
+        overall_best_move_idx = root_available_moves_indices[0] # Fallback to first available move if no clear best
+        overall_best_score = move_scores_from_last_iter.get(overall_best_move_idx, (-math.inf if is_maximizing_search else math.inf))
         found_fallback_details = next((item for item in last_iter_full_eval_details_rc if item['move'] == bit_index_to_cell(overall_best_move_idx, current_board_size)), None)
-        if found_fallback_details: final_iddfs_ply_limit_for_best_move = found_fallback_details.get('depth', 1)
-        else: final_iddfs_ply_limit_for_best_move = 1 if max_remaining_plies > 0 else 0
+        if found_fallback_details: 
+            final_iddfs_ply_limit_for_best_move = found_fallback_details.get('depth', 1)
+        else: 
+            final_iddfs_ply_limit_for_best_move = 1 if max_remaining_plies > 0 else 0
+            
     final_best_move_rc = bit_index_to_cell(overall_best_move_idx, current_board_size) if overall_best_move_idx is not None else None
+    
     final_top_moves_list_rc = []
     if last_iter_full_eval_details_rc:
         last_iter_full_eval_details_rc.sort(key=lambda x: x['score'], reverse=is_maximizing_search)
-        final_top_moves_list_rc = last_iter_full_eval_details_rc[:5] # Top 5 moves
-    elif final_best_move_rc: # Should only happen if search was extremely short (e.g. immediate win)
+        final_top_moves_list_rc = last_iter_full_eval_details_rc[:5]
+    elif final_best_move_rc: # Should only be hit if search was extremely short
         final_top_moves_list_rc = [{'move': final_best_move_rc, 'score': overall_best_score, 'nodes': 1, 'depth': final_iddfs_ply_limit_for_best_move, 'actual_eval_depth': final_iddfs_ply_limit_for_best_move}]
+        
     result_q.put({'best_move_data': (final_best_move_rc, overall_best_score), 'top_moves_list': final_top_moves_list_rc, 'total_nodes': accumulated_total_nodes, 'achieved_relative_depth': final_iddfs_ply_limit_for_best_move})
 
 # --- Tkinter GUI Class ---
-class TicTacToeGUI: # Structure largely unchanged, AI call points are the main interface change
+class TicTacToeGUI:
     TOP_MOVES_DISPLAY_LINES = 6
     def __init__(self, root_window):
         self.root = root_window; self.root.title("Tic-Tac-Toe AI"); self.root.configure(bg=COLOR_ROOT_BG)
@@ -540,6 +652,7 @@ class TicTacToeGUI: # Structure largely unchanged, AI call points are the main i
         self.board_frame = ttk.Frame(self.board_outer_frame, style="TFrame"); self.board_frame.grid(row=0, column=0, sticky=""); self._set_status_normal("Adjust N, K, then Start.")
     def on_escape_key(self, event=None): self.on_silent_close()
     def on_silent_close(self, event=None): self.root.destroy()
+
     def start_new_game(self, human_starts=True):
         if self.calculation_manager_thread and self.calculation_manager_thread.is_alive(): messagebox.showwarning("Busy", "AI calculation is currently in progress."); return
         try:
@@ -547,11 +660,31 @@ class TicTacToeGUI: # Structure largely unchanged, AI call points are the main i
             if not (2 <= n_val <= 7): messagebox.showerror("Error", "Board size N must be between 2 and 7."); return
             if not (2 <= k_val <= n_val): messagebox.showerror("Error", f"K-in-a-row must be between 2 and N (currently {n_val})."); return
             self.board_size = n_val; self.k_to_win = k_val
-            init_zobrist_bitboard(self.board_size); WINNING_MASKS_CACHE.clear(); POTENTIAL_LINE_MASKS_CACHE.clear()
-            get_win_masks(self.board_size, self.k_to_win); get_potential_line_masks(self.board_size, self.k_to_win)
-            compute_zobrist_hash_from_canonical_bbs.cache_clear(); get_canonical_bitboards.cache_clear(); check_win_bb.cache_clear(); is_board_full_bb.cache_clear(); _get_immediate_winning_moves_bb.cache_clear(); can_force_win_on_next_player_turn_bb.cache_clear(); is_unwinnable_for_either_bb.cache_clear()
-            cell_to_bit_index.cache_clear(); bit_index_to_cell.cache_clear()
+            
+            init_zobrist_bitboard(self.board_size)
+            
+            # --- CORRECTED CACHE CLEARING ---
+            WINNING_MASKS_CACHE.clear() 
+            POTENTIAL_LINE_MASKS_CACHE.clear()
+            # --- END CORRECTION ---
+            
+            # Pre-populate for new size/k
+            get_win_masks(self.board_size, self.k_to_win)
+            get_potential_line_masks(self.board_size, self.k_to_win)
+            
+            # Clear LRU caches for other functions
+            compute_zobrist_hash_from_canonical_bbs.cache_clear()
+            get_canonical_bitboards.cache_clear()
+            check_win_bb.cache_clear()
+            is_board_full_bb.cache_clear()
+            _get_immediate_winning_moves_bb.cache_clear()
+            can_force_win_on_next_player_turn_bb.cache_clear()
+            is_unwinnable_for_either_bb.cache_clear()
+            cell_to_bit_index.cache_clear()
+            bit_index_to_cell.cache_clear()
+            
         except ValueError: messagebox.showerror("Error", "Invalid input for N or K."); return
+        
         total_cells = self.board_size * self.board_size; self.max_game_length_var.set(f"{total_cells} plies"); self.current_turn_max_searchable_depth = total_cells
         self.game_board = [[EMPTY_CELL for _ in range(self.board_size)] for _ in range(self.board_size)]; self.num_moves_made = 0; self.current_player = PLAYER_HUMAN if human_starts else PLAYER_AI; self.game_over = False
         self._set_status_normal(f"{self.board_size}x{self.board_size}, {self.k_to_win}-in-a-row. {'Your turn (X).' if human_starts else 'AI`s turn (O).'}"); self.ai_eval_var.set("N/A"); self.nodes_explored_var.set("0");
@@ -561,6 +694,11 @@ class TicTacToeGUI: # Structure largely unchanged, AI call points are the main i
         if self.detailed_progress_label.winfo_ismapped(): self.detailed_progress_label.grid_remove()
         self.create_board_ui_buttons(); self.update_hint_button_state()
         if not human_starts: self.root.after(100, lambda: self.trigger_ai_or_hint_calculation(PLAYER_AI))
+    
+# ... (rest of the GUI class methods: update_hint_button_state, get_human_hint, etc. remain the same as in the previous correct version) ...
+# --- The rest of the TicTacToeGUI class and the __main__ block remain unchanged ---
+# (Make sure to copy them from the previous version of the code that included the _get_immediate_winning_moves_bb optimization)
+
     def update_hint_button_state(self): is_calc_running = self.calculation_manager_thread and self.calculation_manager_thread.is_alive(); can_hint = not self.game_over and self.current_player == PLAYER_HUMAN and not is_calc_running; self.hint_button.config(state=tk.NORMAL if can_hint else tk.DISABLED)
     def get_human_hint(self):
         if self.game_over or self.current_player != PLAYER_HUMAN: return
@@ -735,7 +873,7 @@ class TicTacToeGUI: # Structure largely unchanged, AI call points are the main i
         if not self.buttons: return
         for r,c in winning_cells:
              if r < len(self.buttons) and self.buttons[r] and c < len(self.buttons[r]) and self.buttons[r][c]: self.buttons[r][c].config(background=COLOR_WIN_HIGHLIGHT, relief=tk.GROOVE)
-
+             
 # --- Main Execution ---
 if __name__ == "__main__":
     main_root = tk.Tk()
