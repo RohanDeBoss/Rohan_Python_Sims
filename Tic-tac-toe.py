@@ -7,6 +7,8 @@ import threading
 import queue as thread_queue
 import random
 
+#version = "1.0.0"
+
 # --- Constants ---
 PLAYER_HUMAN = 'X' # Corresponds to player_id 0 for bitboards
 PLAYER_AI = 'O'    # Corresponds to player_id 1 for bitboards
@@ -128,7 +130,6 @@ def get_potential_line_masks(board_size, k_to_win):
         POTENTIAL_LINE_MASKS_CACHE[(board_size, k_to_win)] = _generate_masks_for_k(board_size, k_to_win)
     return POTENTIAL_LINE_MASKS_CACHE[(board_size, k_to_win)]
 
-
 # --- Game Logic (Core - GUI related or Bitboard based) ---
 def get_winning_line(board, player, k_to_win):
     n = len(board)
@@ -232,7 +233,6 @@ def get_available_moves_bb(player_x_bb, player_o_bb, board_size, center_sort=Tru
         available_moves_indices.sort(key=sort_key)
     return available_moves_indices
 
-# --- OPTIMIZED _get_immediate_winning_moves_bb ---
 @functools.lru_cache(maxsize=16384)
 def _get_immediate_winning_moves_bb(player_x_bb, player_o_bb, current_player_id, k_to_win, board_size):
     winning_moves_indices = []
@@ -573,6 +573,7 @@ def find_best_move_iterative_deepening(initial_board_list, k_to_win_config, prog
 # --- Tkinter GUI Class ---
 class TicTacToeGUI:
     TOP_MOVES_DISPLAY_LINES = 6
+
     def __init__(self, root_window):
         self.root = root_window; self.root.title("Tic-Tac-Toe AI"); self.root.configure(bg=COLOR_ROOT_BG)
         try: self.default_font_family = tkfont.nametofont("TkDefaultFont").actual()["family"]
@@ -586,12 +587,16 @@ class TicTacToeGUI:
         self.max_game_length_var = tk.StringVar(value="N/A")
         self.setup_ui_layout(); self.root.bind("<F11>", self.toggle_fullscreen); self.root.bind("<Escape>", self.on_escape_key); self.root.protocol("WM_DELETE_WINDOW", self.on_silent_close)
         self.root.after_idle(lambda: self.start_new_game(human_starts=True))
+
     def _get_empty_top_moves_text(self):
         lines = ["Top Move Considerations:", f"  {'Move':<5} {'Score':<6} {'Nodes':<10}", "-" * 30, "  (After calculation)"]
         while len(lines) < self.TOP_MOVES_DISPLAY_LINES: lines.append("")
         return "\n".join(lines[:self.TOP_MOVES_DISPLAY_LINES])
+    
     def _set_status_as_hint(self, text): self.status_var.set(text); self.status_label.config(style="HintSuggest.TLabel", anchor=tk.CENTER)
+    
     def _set_status_normal(self, text): self.status_var.set(text); self.status_label.config(style="Status.TLabel", anchor=tk.W)
+    
     def setup_styles(self):
         self.style = ttk.Style(); available_themes = self.style.theme_names(); current_os = self.root.tk.call("tk", "windowingsystem")
         if 'clam' in available_themes: self.style.theme_use('clam')
@@ -621,7 +626,9 @@ class TicTacToeGUI:
         self.style.configure("TEntry", font=self.fonts["entry"], padding=3, fieldbackground=COLOR_FRAME_BG, foreground=COLOR_TEXT_PRIMARY, bordercolor="#CCCCCC")
         self.style.configure("Horizontal.TProgressbar", thickness=12, background=COLOR_ACCENT_PRIMARY, troughcolor="#DDDDDD", bordercolor=COLOR_ACCENT_SECONDARY)
         self.style.configure("Hint.Horizontal.TProgressbar", thickness=12, background=COLOR_HINT_PROGRESS_BAR, troughcolor="#DDDDDD", bordercolor=COLOR_HINT)
+    
     def toggle_fullscreen(self, event=None): self.is_fullscreen = not self.is_fullscreen; self.root.attributes("-fullscreen", self.is_fullscreen); self.root.after(50, self.create_board_ui_buttons) if self.buttons else None
+    
     def setup_ui_layout(self):
         self.root.grid_rowconfigure(0, weight=1); self.root.grid_columnconfigure(0, weight=1)
         self.paned_window = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL); self.paned_window.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
@@ -650,7 +657,9 @@ class TicTacToeGUI:
         self.top_moves_label = ttk.Label(status_vis_frame, textvariable=self.top_moves_var, style="TopMoveInfo.TLabel", anchor="nw", wraplength=280); self.top_moves_label.grid(row=4, column=0, columnspan=2, pady=(10,0), sticky="nsew")
         self.board_outer_frame = ttk.Frame(self.paned_window, style="TFrame", padding=10); self.paned_window.add(self.board_outer_frame, weight=2); self.board_outer_frame.grid_rowconfigure(0, weight=1); self.board_outer_frame.grid_columnconfigure(0, weight=1)
         self.board_frame = ttk.Frame(self.board_outer_frame, style="TFrame"); self.board_frame.grid(row=0, column=0, sticky=""); self._set_status_normal("Adjust N, K, then Start.")
+    
     def on_escape_key(self, event=None): self.on_silent_close()
+    
     def on_silent_close(self, event=None): self.root.destroy()
 
     def start_new_game(self, human_starts=True):
@@ -663,11 +672,9 @@ class TicTacToeGUI:
             
             init_zobrist_bitboard(self.board_size)
             
-            # --- CORRECTED CACHE CLEARING ---
             WINNING_MASKS_CACHE.clear() 
             POTENTIAL_LINE_MASKS_CACHE.clear()
-            # --- END CORRECTION ---
-            
+
             # Pre-populate for new size/k
             get_win_masks(self.board_size, self.k_to_win)
             get_potential_line_masks(self.board_size, self.k_to_win)
@@ -695,15 +702,13 @@ class TicTacToeGUI:
         self.create_board_ui_buttons(); self.update_hint_button_state()
         if not human_starts: self.root.after(100, lambda: self.trigger_ai_or_hint_calculation(PLAYER_AI))
     
-# ... (rest of the GUI class methods: update_hint_button_state, get_human_hint, etc. remain the same as in the previous correct version) ...
-# --- The rest of the TicTacToeGUI class and the __main__ block remain unchanged ---
-# (Make sure to copy them from the previous version of the code that included the _get_immediate_winning_moves_bb optimization)
-
     def update_hint_button_state(self): is_calc_running = self.calculation_manager_thread and self.calculation_manager_thread.is_alive(); can_hint = not self.game_over and self.current_player == PLAYER_HUMAN and not is_calc_running; self.hint_button.config(state=tk.NORMAL if can_hint else tk.DISABLED)
+    
     def get_human_hint(self):
         if self.game_over or self.current_player != PLAYER_HUMAN: return
         if self.calculation_manager_thread and self.calculation_manager_thread.is_alive(): messagebox.showinfo("Busy", "AI calculation is currently in progress."); return
         self.trigger_ai_or_hint_calculation(PLAYER_HUMAN)
+    
     def trigger_ai_or_hint_calculation(self, player_to_calculate_for):
         self.num_moves_made_at_calc_start = self.num_moves_made; self.current_turn_max_searchable_depth = (self.board_size * self.board_size) - self.num_moves_made
         if self.current_turn_max_searchable_depth <= 0: self.current_turn_max_searchable_depth = 1
@@ -716,6 +721,7 @@ class TicTacToeGUI:
         while not self.result_queue.empty(): self.result_queue.get_nowait()
         self.calculation_manager_thread = threading.Thread(target=find_best_move_iterative_deepening, args=(self.game_board, self.k_to_win, self.progress_queue, self.result_queue, player_to_calculate_for), daemon=True)
         self.ai_start_time = time.monotonic(); self.last_time_taken_update = self.ai_start_time; self._current_calculation_for_player = player_to_calculate_for; self.calculation_manager_thread.start(); self.check_ai_progress()
+    
     def create_board_ui_buttons(self, attempt=1):
         for widget in self.board_frame.winfo_children(): widget.destroy(); self.buttons = []
         self.root.update_idletasks(); container_width, container_height = self.board_outer_frame.winfo_width(), self.board_outer_frame.winfo_height()
@@ -729,12 +735,14 @@ class TicTacToeGUI:
             for c_idx in range(self.board_size): button = tk.Button(self.board_frame, text=EMPTY_CELL, font=board_button_font, relief="flat", borderwidth=1, bg=COLOR_FRAME_BG, activebackground="#DDDDDD", fg=COLOR_TEXT_PRIMARY, command=lambda r_idx=r, c_idx_btn=c_idx: self.handle_cell_click(r_idx, c_idx_btn)); button.grid(row=r, column=c_idx, sticky="nsew", padx=1, pady=1); row_buttons.append(button)
             self.buttons.append(row_buttons)
         self.update_board_button_states()
+    
     def handle_cell_click(self, r, c):
         if self.game_over or self.game_board[r][c] != EMPTY_CELL or self.current_player != PLAYER_HUMAN: return
         if self.calculation_manager_thread and self.calculation_manager_thread.is_alive(): messagebox.showinfo("Wait", "AI calculation is currently in progress."); return
         self._set_status_normal(f"You placed X at {to_algebraic(r,c,self.board_size)}. AI (O) thinking..."); self.clear_all_hint_highlights(); self.make_move(r, c, PLAYER_HUMAN)
         if self.check_game_status(): return
         self.current_player = PLAYER_AI; self.update_hint_button_state(); self.trigger_ai_or_hint_calculation(PLAYER_AI)
+    
     def clear_all_hint_highlights(self):
         if not self.buttons or not self.game_board: return
         for r_idx in range(self.board_size):
@@ -742,8 +750,12 @@ class TicTacToeGUI:
                 for c_idx in range(self.board_size):
                     if c_idx < len(self.buttons[r_idx]) and self.buttons[r_idx][c_idx] and self.game_board[r_idx][c_idx] == EMPTY_CELL and self.buttons[r_idx][c_idx].cget('bg') == COLOR_HINT_SUGGEST_BG:
                         self.buttons[r_idx][c_idx].config(bg=COLOR_FRAME_BG, relief="flat")
+    
     def check_ai_progress(self):
-        update_interval_ms, max_messages_to_process = 35, 5; current_runtime = 0.0; is_calculating = self.calculation_manager_thread and self.calculation_manager_thread.is_alive()
+        update_interval_ms = 42
+        max_messages_to_process = 7
+        current_runtime = 0.0
+        is_calculating = self.calculation_manager_thread and self.calculation_manager_thread.is_alive()
         if is_calculating:
             current_monotonic_time = time.monotonic(); current_runtime = current_monotonic_time - self.ai_start_time
             if current_monotonic_time - self.last_time_taken_update > 0.083: self.time_taken_var.set(f"{current_runtime:.2f}"); self.last_time_taken_update = current_monotonic_time
@@ -807,8 +819,9 @@ class TicTacToeGUI:
             if last_best_score is not None: self.ai_eval_var.set(f"{last_best_score:.0f}" if isinstance(last_best_score, (int, float)) and last_best_score not in (math.inf, -math.inf) else str(last_best_score))
             self.handle_calculation_result(); self.calculation_manager_thread = None
             self.progress_percent_var.set("100%"); self.detailed_progress_var.set("Search complete.")
+    
     def handle_calculation_result(self):
-        self.root.config(cursor="");
+        self.root.config(cursor="")
         if self.progress_bar.master.winfo_ismapped(): self.progress_bar.master.grid_remove()
         if self.detailed_progress_label.winfo_ismapped(): self.detailed_progress_label.grid_remove()
         try: time_taken_calc = float(self.time_taken_var.get())
@@ -840,7 +853,9 @@ class TicTacToeGUI:
                 current_x_bb, current_o_bb = list_to_bitboards(self.game_board, self.board_size)
                 self._set_status_normal("It's a Draw!" if is_board_full_bb(current_x_bb, current_o_bb, self.board_size) else "AI error/no moves. Game Over?"); self.game_over = True
         self.enable_board_buttons(); self.update_hint_button_state()
+    
     def make_move(self, r, c, player): self.game_board[r][c] = player; self.num_moves_made += 1; btn = self.buttons[r][c]; btn.config(text=player, state=tk.DISABLED, relief=tk.SUNKEN, disabledforeground=(COLOR_ACCENT_SECONDARY if player == PLAYER_HUMAN else COLOR_DANGER), background=(COLOR_HUMAN_MOVE_BG if player == PLAYER_HUMAN else COLOR_AI_MOVE_BG))
+    
     def check_game_status(self):
         human_line, ai_line = get_winning_line(self.game_board, PLAYER_HUMAN, self.k_to_win), get_winning_line(self.game_board, PLAYER_AI, self.k_to_win)
         current_x_bb, current_o_bb = list_to_bitboards(self.game_board, self.board_size)
@@ -852,6 +867,7 @@ class TicTacToeGUI:
             elif full: self._set_status_normal("It's a Draw!"); self.game_over=True; over_changed=True
         if over_changed or self.game_over: self.disable_board_buttons(); self.update_hint_button_state()
         return self.game_over
+    
     def update_board_button_states(self):
         if not self.buttons: return
         for r, row_btns in enumerate(self.buttons):
@@ -861,14 +877,17 @@ class TicTacToeGUI:
                 is_hinted = button.cget('bg') == COLOR_HINT_SUGGEST_BG
                 if current_cell_text == EMPTY_CELL: button.config(text=current_cell_text, state=tk.NORMAL, fg=COLOR_TEXT_PRIMARY, bg=COLOR_HINT_SUGGEST_BG if is_hinted else COLOR_FRAME_BG, relief="raised" if is_hinted else "flat")
                 else: button.config(text=current_cell_text, state=tk.DISABLED, relief="sunken", disabledforeground=(COLOR_ACCENT_SECONDARY if current_cell_text == PLAYER_HUMAN else COLOR_DANGER), background=(COLOR_HUMAN_MOVE_BG if current_cell_text == PLAYER_HUMAN else COLOR_AI_MOVE_BG))
+    
     def disable_board_buttons(self):
         if not self.buttons: return
         for row_btns in self.buttons:
             for button in row_btns:
                 if button and button['state'] == tk.NORMAL: button.config(state=tk.DISABLED)
+    
     def enable_board_buttons(self):
         if self.game_over or (self.calculation_manager_thread and self.calculation_manager_thread.is_alive()) or not self.buttons: return
         self.update_board_button_states()
+    
     def highlight_winning_line(self, winning_cells):
         if not self.buttons: return
         for r,c in winning_cells:
