@@ -222,15 +222,43 @@ def get_canonical_bitboards(player_x_bb, player_o_bb, board_size):
     return min(symmetries)
 
 # --- AI Helper Functions (Bitboard based) ---
+
 def get_available_moves_bb(player_x_bb, player_o_bb, board_size, center_sort=True):
-    occupied_bb = player_x_bb | player_o_bb; num_cells = board_size * board_size
+    occupied_bb = player_x_bb | player_o_bb
+    num_cells = board_size * board_size
+    
+    # Create a mask for all cells on the board.
+    all_board_mask = (1 << num_cells) - 1
+    available_bb = (~occupied_bb) & all_board_mask
+
     available_moves_indices = []
-    for bit_idx in range(num_cells):
-        if not (occupied_bb & (1 << bit_idx)): available_moves_indices.append(bit_idx)
+    
+    # Iterate while there are available moves (set bits in available_bb)
+    temp_available_bb = available_bb # Work with a temporary copy
+    while temp_available_bb > 0:
+        # Isolate the least significant bit (LSB)
+        lsb_mask = temp_available_bb & -temp_available_bb 
+        
+        # Convert LSB mask to bit index (0-based)
+        current_move_idx = lsb_mask.bit_length() - 1
+        available_moves_indices.append(current_move_idx)
+        
+        # Clear the LSB from temp_available_bb to prepare for the next iteration.
+        temp_available_bb &= (temp_available_bb - 1) 
+
     if center_sort:
+        # Sort moves by proximity to the center (Manhattan distance).
         center_r, center_c = (board_size - 1) / 2.0, (board_size - 1) / 2.0
-        def sort_key(bit_idx): r, c = bit_index_to_cell(bit_idx, board_size); return (abs(r - center_r) + abs(c - center_c), r, c)
+        
+        # The sort_key function uses bit_index_to_cell, which is cached via @functools.lru_cache.
+        # Parameter name 'idx_param' is used to be distinct from 'current_move_idx' in the outer scope.
+        def sort_key(idx_param): 
+            r_coord, c_coord = bit_index_to_cell(idx_param, board_size)
+            # Sort by distance, then by row, then by column for stable sorting.
+            return (abs(r_coord - center_r) + abs(c_coord - center_c), r_coord, c_coord)
+        
         available_moves_indices.sort(key=sort_key)
+        
     return available_moves_indices
 
 @functools.lru_cache(maxsize=16384)
@@ -249,11 +277,9 @@ def _get_immediate_winning_moves_bb(player_x_bb, player_o_bb, current_player_id,
             continue 
 
         # 2. Find which pieces the current player still needs to place in this line to win
-        #    These are bits in the win_mask that are not yet set in current_player_bb.
         needed_for_win_mask = mask & ~current_player_bb
         
         # 3. Check if exactly one piece is needed to complete the line
-        #    (i.e., needed_for_win_mask has only one bit set - it's a power of 2)
         if needed_for_win_mask != 0 and (needed_for_win_mask & (needed_for_win_mask - 1)) == 0:
             move_bit = needed_for_win_mask # This is the single bit (piece) needed
             
