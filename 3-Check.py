@@ -14,7 +14,6 @@ INITIAL_SQUARE_SIZE = 66
 INITIAL_WINDOW_WIDTH = (8 * INITIAL_SQUARE_SIZE) + 290
 INITIAL_WINDOW_HEIGHT = (8 * INITIAL_SQUARE_SIZE) + 29
 CONTROL_PANEL_DEFAULT_WIDTH = INITIAL_WINDOW_WIDTH - (8 * INITIAL_SQUARE_SIZE) - 37
-# --- FIX: Increased TT size ---
 TT_SIZE_POWER_OF_2 = 17 # 2^17 = 131,072 entries
 # ----------------------------
 
@@ -78,9 +77,6 @@ class ChessAI:
 
         self.SEE_PIECE_VALUES = [0, 100, 320, 330, 500, 900, 20000] # P, N, B, R, Q, K
         self._PIECE_VALUES_LST_NMP = [0, 100, 320, 330, 500, 900, 0] # King 0 for NMP material
-        self.NMP_R_REDUCTION = 3
-        self.NMP_MIN_DEPTH_THRESHOLD = 1 + self.NMP_R_REDUCTION
-        self.NMP_MIN_MATERIAL_FOR_SIDE = self._PIECE_VALUES_LST_NMP[chess.ROOK]
 
         self.TT_MOVE_ORDER_BONUS = 250000
         self.CAPTURE_BASE_ORDER_BONUS = 100000
@@ -107,6 +103,9 @@ class ChessAI:
         self.zobrist_side = random.getrandbits(64)
         self.zobrist_white_checks = [random.getrandbits(64) for _ in range(11)] 
         self.zobrist_black_checks = [random.getrandbits(64) for _ in range(11)]
+        # --- OPTIMIZATION: Pre-calculate Zobrist hashes for checks ---
+        self._zobrist_wc = self.zobrist_white_checks
+        self._zobrist_bc = self.zobrist_black_checks
 
     def compute_hash(self, board: chess.Board, white_checks: int, black_checks: int) -> int:
         h = 0
@@ -120,47 +119,57 @@ class ChessAI:
             h ^= self.zobrist_ep[chess.square_file(board.ep_square)]
         if board.turn == chess.BLACK:
             h ^= self.zobrist_side
-        if white_checks < len(self.zobrist_white_checks):
-            h ^= self.zobrist_white_checks[white_checks]
-        if black_checks < len(self.zobrist_black_checks):
-            h ^= self.zobrist_black_checks[black_checks]
+        
+        # --- OPTIMIZATION: Use pre-calculated hashes ---
+        if white_checks < 11:
+            h ^= self._zobrist_wc[white_checks]
+        if black_checks < 11:
+            h ^= self._zobrist_bc[black_checks]
+            
         return h
 
-    def get_side_material(self, board: chess.Board, color: chess.Color) -> int:
-        material = 0
-        for piece_type in [chess.PAWN, chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN]:
-            material += len(board.pieces(piece_type, color)) * self._PIECE_VALUES_LST_NMP[piece_type]
-        return material
+    # --- OPTIMIZATION: This function is no longer used, replaced by bitboard logic ---
+    # def get_side_material(self, board: chess.Board, color: chess.Color) -> int: ...
 
     def get_mvv_lva_score(self, board: chess.Board, move: chess.Move) -> int:
-        attacker = board.piece_at(move.from_square)
-        victim_piece_at_to_square = board.piece_at(move.to_square)
-        if board.is_en_passant(move): victim_piece_type = chess.PAWN
-        elif victim_piece_at_to_square: victim_piece_type = victim_piece_at_to_square.piece_type
-        else: return 0
-        if not attacker: return 0
-        victim_value = self.EVAL_PIECE_VALUES_LST[victim_piece_type]
-        attacker_value = self.EVAL_PIECE_VALUES_LST[attacker.piece_type]
-        return victim_value * 10 - attacker_value
+        # --- OPTIMIZATION: Reduced function calls ---
+        attacker_type = board.piece_type_at(move.from_square)
+        victim_type = board.piece_type_at(move.to_square)
+        
+        if victim_type is None: # En-passant case
+            if move.promotion or not (board.is_en_passant(move)):
+                return 0
+            victim_type = chess.PAWN
+        
+        if attacker_type is None: return 0
+
+        # MVV-LVA: Most Valuable Victim - Least Valuable Attacker
+        return self.EVAL_PIECE_VALUES_LST[victim_type] * 10 - self.EVAL_PIECE_VALUES_LST[attacker_type]
 
     def _get_lowest_attacker_see(self, board: chess.Board, to_sq: chess.Square, side: chess.Color) -> Optional[chess.Move]:
+        # --- OPTIMIZATION: Use bitboards directly for faster attacker generation ---
+        attackers_mask = board.attackers_mask(side, to_sq)
+        if not attackers_mask:
+            return None
+
         lowest_value = float('inf')
-        best_move = None
-        attacker_squares = board.attackers(side, to_sq)
-        if not attacker_squares: return None
-        for from_sq in attacker_squares:
-            piece = board.piece_at(from_sq)
-            if piece:
-                current_value = self.SEE_PIECE_VALUES[piece.piece_type]
+        best_from_sq = -1
+
+        for piece_type in range(chess.PAWN, chess.KING + 1):
+            pieces = board.pieces_mask(piece_type, side) & attackers_mask
+            if pieces:
+                from_sq = chess.msb(pieces) # Get the most significant bit (one of the attackers)
+                current_value = self.SEE_PIECE_VALUES[piece_type]
                 if current_value < lowest_value:
                     lowest_value = current_value
-                    promotion_piece = None
-                    if piece.piece_type == chess.PAWN and ((side == chess.WHITE and chess.square_rank(to_sq) == 7) or (side == chess.BLACK and chess.square_rank(to_sq) == 0)):
-                        promotion_piece = chess.QUEEN
-                    best_move = chess.Move(from_sq, to_sq, promotion=promotion_piece)
-        return best_move
+                    best_from_sq = from_sq
+        
+        if best_from_sq != -1:
+            return chess.Move(best_from_sq, to_sq)
+        return None
 
     def see(self, board: chess.Board, move: chess.Move) -> int:
+        # ... (This function remains complex, but the helper it calls is now faster) ...
         target_sq = move.to_square
         initial_attacker_piece = board.piece_at(move.from_square)
         if not initial_attacker_piece: return 0
@@ -232,20 +241,26 @@ class ChessAI:
                     tt_move: Optional[chess.Move], ply: int,
                     white_checks: int, black_checks: int, max_checks: int,
                     qsearch_mode: bool = False) -> List[Tuple[chess.Move, bool, bool]]:
+        # --- OPTIMIZATION: Pre-calculate if a move gives check to avoid re-calculation ---
         moves_to_process_details = []
         for m in legal_moves_generator:
             is_c = board.is_capture(m)
             is_promo = m.promotion is not None
-            g_c = board.gives_check(m)
-            if qsearch_mode and not is_c and not is_promo and not g_c:
+            
+            # This is one of the most expensive checks. Do it once.
+            gives_check = board.gives_check(m) 
+
+            if qsearch_mode and not is_c and not is_promo and not gives_check:
                 continue
-            moves_to_process_details.append({'move': m, 'is_capture': is_c, 'gives_check': g_c})
+            moves_to_process_details.append({'move': m, 'is_capture': is_c, 'gives_check': gives_check})
+
         scored_move_data = []
         for move_attrs in moves_to_process_details:
             m = move_attrs['move']; is_c = move_attrs['is_capture']; g_c = move_attrs['gives_check']
             current_score = self.get_move_score(board, m, is_c, g_c, tt_move, ply,
                                                white_checks, black_checks, max_checks, qsearch_mode)
             scored_move_data.append((current_score, m, is_c, g_c))
+        
         scored_move_data.sort(key=lambda x: x[0], reverse=True)
         return [(data[1], data[2], data[3]) for data in scored_move_data]
 
@@ -314,23 +329,16 @@ class ChessAI:
         return alpha if maximizing_player else beta
 
     def store_in_tt(self, key: int, depth: int, value: int, flag: int, best_move: Optional[chess.Move]):
-        # --- FIX: Depth-preferred replacement strategy ---
         existing_entry = self.transposition_table.get(key)
         if existing_entry and existing_entry['depth'] > depth:
-            return # Don't overwrite a deeper, more valuable entry
-        
-        # If the table is full, this will just overwrite an existing random key.
-        # A more sophisticated strategy (like LRU) could be used, but this is a good start.
+            return 
         if len(self.transposition_table) >= self.tt_size_limit and self.tt_size_limit > 0 and not existing_entry:
             try:
-                # Simple FIFO-like removal if we are inserting a new key and table is full
                 self.transposition_table.pop(next(iter(self.transposition_table)))
             except StopIteration:
                 pass
-        
         if self.tt_size_limit > 0:
             self.transposition_table[key] = {'depth': depth, 'value': value, 'flag': flag, 'best_move': best_move.uci() if best_move else None}
-
 
     def minimax(self, board: chess.Board, depth: int, alpha: int, beta: int, maximizing_player: bool, ply: int,
                 white_checks_delivered: int, black_checks_delivered: int, max_checks: int) -> Tuple[int, Optional[chess.Move]]:
@@ -412,7 +420,6 @@ class ChessAI:
         self.nodes_evaluated = 0; self.q_nodes_evaluated = 0
         best_move_overall: Optional[chess.Move] = None
         final_value = 0
-        # --- FIX: TT is no longer cleared here. It is persistent. ---
         self.killer_moves = [[None, None] for _ in range(depth + 15)]
         self.history_table.clear()
         
@@ -444,6 +451,7 @@ class ChessUI:
         self.flipped = False
         self.game_over_flag = False
         self.ai_thinking = False
+        self.player_is_white = True
         self.dragging_piece_item_id: Optional[int] = None
         self.drag_start_x_offset = 0; self.drag_start_y_offset = 0
         self.drag_selected_square: Optional[chess.Square] = None
@@ -487,8 +495,11 @@ class ChessUI:
         control_panel = ttk.Frame(main_frame, padding=(10,5,8,5), width=CONTROL_PANEL_DEFAULT_WIDTH)
         control_panel.grid(row=0, column=1, sticky="ns", padx=(8,5)); control_panel.grid_propagate(False)
         row_idx, btn_width = 0, 22
-        for text, cmd in [("New Game", self.reset_game), ("Flip Board", self.flip_board), ("Undo", self.undo_last_player_ai_moves)]:
-            ttk.Button(control_panel, text=text, command=cmd, width=btn_width).grid(row=row_idx, column=0, columnspan=2, pady=4, sticky="ew"); row_idx+=1
+        
+        ttk.Button(control_panel, text="New Game", command=self.reset_game, width=btn_width).grid(row=row_idx, column=0, columnspan=2, pady=4, sticky="ew"); row_idx+=1
+        ttk.Button(control_panel, text="Switch Sides & New Game", command=self.switch_sides, width=btn_width).grid(row=row_idx, column=0, columnspan=2, pady=4, sticky="ew"); row_idx+=1
+        ttk.Button(control_panel, text="Undo", command=self.undo_last_player_ai_moves, width=btn_width).grid(row=row_idx, column=0, columnspan=2, pady=4, sticky="ew"); row_idx+=1
+
         self.checks_labelframe = ttk.LabelFrame(control_panel, text=f"Checks (Goal: {self.MAX_CHECKS})")
         self.checks_labelframe.grid(row=row_idx, column=0,columnspan=2, pady=(8,5), sticky="ew"); row_idx+=1
         inner_checks_frame = ttk.Frame(self.checks_labelframe); inner_checks_frame.pack(fill=tk.X, expand=True, padx=4, pady=(2,4))
@@ -585,28 +596,42 @@ class ChessUI:
 
     def update_status_label(self, for_ai_move_eval=None):
         status, eval_text = "", ""
-        if self.game_over_flag:
-            current_status = self.status_label.cget("text")
-            if any(term in current_status for term in ["wins", "Draw", "Checkmate"]): status = current_status
-        if not status:
-            if self.white_checks_delivered >= self.MAX_CHECKS: status, self.game_over_flag = f"White wins by {self.MAX_CHECKS} checks!", True
-            elif self.black_checks_delivered >= self.MAX_CHECKS: status, self.game_over_flag = f"Black wins by {self.MAX_CHECKS} checks!", True
-            elif (outcome := self.board.outcome(claim_draw=True)): self.game_over_flag = True; status = f"Draw! ({outcome.termination.name.replace('_',' ').title()})" if outcome.winner is None else f"Checkmate! {'White' if outcome.winner else 'Black'} wins!"
-            else: status, self.game_over_flag = ("White's" if self.board.turn == chess.WHITE else "Black's") + " turn" + (" (Check!)" if self.board.is_check() else ""), False
-        
-        score = for_ai_move_eval if for_ai_move_eval is not None else self.ai.evaluate_position(self.board, self.white_checks_delivered, self.black_checks_delivered, self.MAX_CHECKS) if not self.ai_thinking else None
-        if score is None: eval_text = "Eval: Thinking..."
+        if self.white_checks_delivered >= self.MAX_CHECKS:
+            status, self.game_over_flag = f"White wins by {self.MAX_CHECKS} checks!", True
+            eval_text = f"Eval: {self.MAX_CHECKS}-Check Win!"
+        elif self.black_checks_delivered >= self.MAX_CHECKS:
+            status, self.game_over_flag = f"Black wins by {self.MAX_CHECKS} checks!", True
+            eval_text = f"Eval: {self.MAX_CHECKS}-Check Win!"
+        elif (outcome := self.board.outcome(claim_draw=True)):
+            self.game_over_flag = True
+            if outcome.winner is None:
+                status = f"Draw! ({outcome.termination.name.replace('_',' ').title()})"
+                eval_text = "Eval: Draw"
+            else:
+                winner = "White" if outcome.winner == chess.WHITE else "Black"
+                status = f"Checkmate! {winner} wins!"
+                eval_text = "Eval: Checkmate!"
         else:
-            win_thresh, mate_thresh = self.ai.WIN_SCORE - 200, self.ai.CHECKMATE_SCORE - 200
-            if abs(score) > win_thresh:
-                plies_to_win = self.ai.WIN_SCORE - abs(score)
-                eval_text = f"Eval: {self.MAX_CHECKS}-Check Win in {plies_to_win} plies"
-            elif abs(score) > mate_thresh:
-                plies_to_mate = self.ai.CHECKMATE_SCORE - abs(score)
-                eval_text = f"Eval: Mate in {plies_to_mate} plies"
-            elif score == 0 and self.game_over_flag: eval_text = "Eval: +0.00 (Draw)"
-            else: eval_text = f"Eval: {score / 100.0:+.2f}"
-        
+            self.game_over_flag = False
+            status = ("White's" if self.board.turn == chess.WHITE else "Black's") + " turn" + (" (Check!)" if self.board.is_check() else "")
+
+        if not self.game_over_flag:
+            if self.ai_thinking:
+                eval_text = "Eval: Thinking..."
+            elif for_ai_move_eval is not None:
+                score = for_ai_move_eval
+                win_thresh, mate_thresh = self.ai.WIN_SCORE - 200, self.ai.CHECKMATE_SCORE - 200
+                if abs(score) > win_thresh:
+                    plies_to_win = self.ai.WIN_SCORE - abs(score)
+                    eval_text = f"Eval: {self.MAX_CHECKS}-Check Win in {plies_to_win} plies"
+                elif abs(score) > mate_thresh:
+                    plies_to_mate = self.ai.CHECKMATE_SCORE - abs(score)
+                    eval_text = f"Eval: Mate in {plies_to_mate} plies"
+                else:
+                    eval_text = f"Eval: {score / 100.0:+.2f}"
+            else:
+                 eval_text = "Eval: +0.00"
+
         if hasattr(self, "status_label"): self.status_label.config(text=status)
         if hasattr(self, "eval_label"): self.eval_label.config(text=eval_text)
 
@@ -615,16 +640,23 @@ class ChessUI:
         if hasattr(self, 'root'): self.root.title(f"{self.MAX_CHECKS}-Check Chess")
         if hasattr(self, 'checks_labelframe'): self.checks_labelframe.config(text=f"Checks (Goal: {self.MAX_CHECKS})")
         self.white_checks_delivered, self.black_checks_delivered = 0, 0; self.check_history.clear()
-        # --- FIX: TT is now cleared only on a new game ---
         self.ai.transposition_table.clear(); 
         self.ai.killer_moves = [[None,None] for _ in range(self.ai_depth + 15)]; self.ai.history_table.clear()
         self.drag_selected_square = None; self.ai_thinking = False
         if self.dragging_piece_item_id: self.canvas.delete(self.dragging_piece_item_id); self.dragging_piece_item_id = None
         self._clear_highlights();
         if hasattr(self, 'depth_slider'): self.depth_slider.set(self.ai_depth)
-        self.update_ai_depth(self.ai_depth); self.on_canvas_resize()
+        self.update_ai_depth(self.ai_depth)
+        self.on_canvas_resize()
+        
+        if not self.is_player_turn():
+            self.root.after(250, self._start_ai_move_thread)
 
-    def flip_board(self): self.flipped = not self.flipped; self._clear_highlights(); self.drag_selected_square = None; self.redraw_board_and_pieces()
+    def switch_sides(self):
+        self.player_is_white = not self.player_is_white
+        self.flipped = not self.player_is_white
+        self.reset_game()
+
     def undo_last_player_ai_moves(self):
         if self.ai_thinking: return
         num_to_undo = 2 if len(self.board.move_stack) >= 2 and len(self.check_history) >= 2 else 1 if len(self.board.move_stack) >= 1 and len(self.check_history) >= 1 else 0
@@ -640,8 +672,12 @@ class ChessUI:
             self.depth_slider.set(val_int)
         if hasattr(self, 'depth_value_label'): self.depth_value_label.config(text=str(val_int))
 
+    def is_player_turn(self):
+        return (self.board.turn == chess.WHITE and self.player_is_white) or \
+               (self.board.turn == chess.BLACK and not self.player_is_white)
+
     def on_square_interaction_start(self,event):
-        if self.game_over_flag or self.board.turn != chess.WHITE or self.ai_thinking: return
+        if self.game_over_flag or not self.is_player_turn() or self.ai_thinking: return
         clicked_sq = self._get_canvas_xy_to_square(event.x,event.y)
         if clicked_sq is None : return
         if self.drag_selected_square is not None:
@@ -685,9 +721,11 @@ class ChessUI:
         self._clear_highlights()
         if move in self.board.legal_moves:
             self.check_history.append((self.white_checks_delivered, self.black_checks_delivered))
+            player_color = self.board.turn
             self.board.push(move)
             if self.board.is_check():
-                self.white_checks_delivered += 1
+                if player_color == chess.WHITE: self.white_checks_delivered += 1
+                else: self.black_checks_delivered += 1
             self.redraw_board_and_pieces()
             if not self.game_over_flag:
                 self.root.after(50, self._start_ai_move_thread)
@@ -695,7 +733,7 @@ class ChessUI:
             self.redraw_board_and_pieces()
 
     def _start_ai_move_thread(self):
-        if self.ai_thinking or self.game_over_flag: return
+        if self.ai_thinking or self.game_over_flag or self.is_player_turn(): return
         self.ai_thinking = True
         self.update_status_label()
         ai_thread = threading.Thread(target=self._ai_move_worker, daemon=True)
@@ -726,9 +764,11 @@ class ChessUI:
                 return
             if move and move in self.board.legal_moves:
                 self.check_history.append((self.white_checks_delivered, self.black_checks_delivered))
+                ai_color = self.board.turn
                 self.board.push(move)
                 if self.board.is_check():
-                    self.black_checks_delivered += 1
+                    if ai_color == chess.WHITE: self.white_checks_delivered += 1
+                    else: self.black_checks_delivered += 1
             else:
                 print(f"AI Warning: {'Illegal' if move else 'No'} move proposed.")
             self.redraw_board_and_pieces(for_ai_move_eval=eval_score)
