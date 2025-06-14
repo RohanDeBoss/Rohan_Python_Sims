@@ -7,6 +7,8 @@ from typing import Tuple, List, Optional, Dict, Any
 import threading
 import queue
 
+# N_Check_Chess v1.0
+
 # --- Global Configuration ---
 default_ai_depth = 4
 NUM_CHECKS_TO_WIN = 3
@@ -15,34 +17,93 @@ INITIAL_WINDOW_WIDTH = (8 * INITIAL_SQUARE_SIZE) + 290
 INITIAL_WINDOW_HEIGHT = (8 * INITIAL_SQUARE_SIZE) + 29
 CONTROL_PANEL_DEFAULT_WIDTH = INITIAL_WINDOW_WIDTH - (8 * INITIAL_SQUARE_SIZE) - 37
 TT_SIZE_POWER_OF_2 = 17 # 2^17 = 131,072 entries
-# ----------------------------
 
 # --- AI Evaluation Constants ---
 EVAL_WIN_SCORE = 1000000 # Score for N-check win
 EVAL_LOSS_SCORE = -1000000 # Score for N-check loss
 EVAL_CHECKMATE_SCORE = 900000 # Score for traditional checkmate
 
+# --- Updated piece values for N-Check Chess ---
 EVAL_PIECE_VALUES_RAW = {
-    chess.PAWN: 100, chess.KNIGHT: 320, chess.BISHOP: 330,
-    chess.ROOK: 500, chess.QUEEN: 900, chess.KING: 0 # King value for material count, not game eval
+    chess.PAWN: 100, 
+    chess.KNIGHT: 380, # Increased value due to non-blockable checks
+    chess.BISHOP: 330, # Baseline value
+    chess.ROOK: 525,   # Increased value for open-line checks
+    chess.QUEEN: 1050, # Greatly increased value for multi-directional check threats
+    chess.KING: 0      # King value for material count, not game eval
 }
 
 EVAL_MAX_BONUS_FOR_N_MINUS_1_CHECKS = 700 # Bonus for being close to N-check win
 EVAL_CHECK_BONUS_DECAY_RATE = 0.5 # Decay rate for check bonus (e.g., for N-2, N-3 checks).
 EVAL_CHECK_THREAT_BONUS = 300 # Bonus for having a checking move available
-# ----------------------------
 
-# Piece Square Tables (PSTs) - For White's perspective. Mirrored for Black.
+# These tables are in the standard A1->H8 format (rank 1 at bottom, rank 8 at top).
 ORIGINAL_PSTS_RAW = {
-    chess.PAWN: [0,0,0,0,0,0,0,0,50,50,50,50,50,50,50,50,10,10,20,30,30,20,10,10,5,5,10,25,25,10,5,5,0,0,0,20,20,0,0,0,5,-5,-10,0,0,-10,-5,5,5,10,10,-20,-20,10,10,5,0,0,0,0,0,0,0,0],
-    chess.KNIGHT: [-50,-40,-30,-30,-30,-30,-40,-50,-40,-20,0,0,0,0,-20,-40,-30,0,10,15,15,10,0,-30,-30,5,15,20,20,15,5,-30,-30,0,15,20,20,15,0,-30,-30,5,10,15,15,10,5,-30,-40,-20,0,5,5,0,-20,-40,-50,-40,-30,-30,-30,-30,-40,-50],
-    chess.BISHOP: [-20,-10,-10,-10,-10,-10,-10,-20,-10,0,0,0,0,0,0,-10,-10,0,5,10,10,5,0,-10,-10,5,5,10,10,5,5,-10,-10,0,10,10,10,10,0,-10,-10,10,10,10,10,10,10,-10,-10,5,0,0,0,0,5,-10,-20,-10,-10,-10,-10,-10,-10,-20],
-    chess.ROOK: [0,0,0,0,0,0,0,0,5,5,10,10,10,10,5,5,-5,0,0,0,0,0,0,-5,0,0,0,0,0,0,0,0,-5,0,0,0,0,0,0,-5,-5,0,0,0,0,0,0,-5,-5,0,0,0,0,0,0,-5,0,0,0,5,5,0,0,0],
-    chess.QUEEN: [-20,-10,-10,-5,-5,-10,-10,-20,-10,0,0,0,0,0,0,-10,-10,0,5,5,5,5,0,-10,-5,0,5,5,5,5,0,-5,0,0,5,5,5,5,0,-5,-10,5,5,5,5,5,0,-10,-10,0,5,0,0,0,0,-10,-20,-10,-10,-5,-5,-10,-10,-20],
-    chess.KING: [ 20, 30, 10,  0,  0, 10, 30, 20, 20, 20,  0,  0,  0,  0, 20, 20,-10,-20,-20,-20,-20,-20,-20,-10,-20,-30,-30,-40,-40,-30,-30,-20,-30,-40,-40,-50,-50,-40,-40,-30,-30,-40,-40,-50,-50,-40,-40,-30,-30,-40,-40,-50,-50,-40,-40,-30]
+    chess.PAWN: [
+        0,   0,   0,   0,   0,   0,   0,   0,
+       50,  50,  50,  50,  50,  50,  50,  50,
+       10,  10,  20,  30,  30,  20,  10,  10,
+        5,   5,  10,  25,  25,  10,   5,   5,
+        0,   0,   0,  20,  25,   0,   0,   0,
+        5,  -5,  -5,   0,   0, -10,  -5,   0,
+        5,  10,  10, -20, -20,  10,  10,   5,
+        0,   0,   0,   0,   0,   0,   0,   0
+    ],
+    chess.KNIGHT: [
+      -50, -40, -30, -30, -30, -30, -40, -50,
+      -40, -20,   0,   0,   0,   0, -20, -40,
+      -30,   0,  10,  15,  15,  10,   0, -30,
+      -30,   5,  15,  20,  20,  15,   5, -30,
+      -30,   0,  15,  20,  20,  15,   0, -30,
+      -30,   5,  10,  15,  15,  10,   5, -30,
+      -40, -20,   0,   5,   5,   0, -20, -40,
+      -50, -40, -30, -30, -30, -30, -40, -50
+    ],
+    chess.BISHOP: [
+      -20, -10, -10, -10, -10, -10, -10, -20,
+      -10,   0,   0,   0,   0,   0,   0, -10,
+      -10,   0,   5,  10,  10,   5,   0, -10,
+      -10,   5,   5,  10,  10,   5,   5, -10,
+      -10,   0,  10,  10,  10,  10,   0, -10,
+      -10,  10,  10,  10,  10,  10,  10, -10,
+      -10,   5,   0,   0,   0,   0,   5, -10,
+      -20, -10, -10, -10, -10, -10, -10, -20
+    ],
+    chess.ROOK: [
+        0,   0,   0,   0,   0,   0,   0,   0,
+        5,   15,  20,  20,  20,  20,  15,  5,
+       -5,   0,   0,   0,   0,   0,   0,  -5,
+        0,   0,   0,   0,   0,   0,   0,   0,
+       -5,   0,   0,   0,   0,   0,   0,  -5,
+       -5,   0,   0,   0,   0,   0,   0,  -5,
+       -5,   0,   0,   0,   0,   0,   0,  -5,
+        0,   0,   0,   5,   5,   0,   0,   0
+    ],
+    chess.QUEEN: [
+      -20, -10, -10,  -5,  -5, -10, -10, -20,
+      -10,   0,   0,   0,   0,   0,   0, -10,
+      -10,   0,   5,   5,   5,   5,   0, -10,
+       -5,   0,   5,  10,  10,   5,   0,  -5,
+        0,   0,   5,   5,   5,   5,   0,  -5,
+      -10,   5,   5,   5,   5,   5,   0, -10,
+      -10,   0,   5,   0,   0,   0,   0, -10,
+      -20, -10, -10,  -5,  -5, -10, -10, -20
+    ],
+    chess.KING: [
+    -30, -40, -40, -50, -50, -40, -40, -30,
+    -30, -40, -40, -50, -50, -40, -40, -30,
+    -30, -40, -40, -50, -50, -40, -40, -30,
+    -30, -40, -40, -50, -50, -40, -40, -30,
+    -20, -30, -30, -40, -40, -30, -30, -20,
+    -10, -20, -20, -20, -20, -20, -20, -10,
+     0,   0,   0,  -10,  -10,  0,  10,  -5,
+    10,  20,  10,   0,   10,   5,  40,  20
+    ]
 }
+
 # Reverse PSTs for python-chess square indexing (A1=0, H8=63)
 PST = {piece_type: list(reversed(values)) for piece_type, values in ORIGINAL_PSTS_RAW.items()}
+
 
 # Transposition Table Flags
 TT_EXACT = 0
@@ -69,14 +130,21 @@ class ChessAI:
         self.LOSS_SCORE = EVAL_LOSS_SCORE
         self.CHECKMATE_SCORE = EVAL_CHECKMATE_SCORE
 
-        self.MAX_Q_DEPTH = 8 
+        self.MAX_Q_DEPTH = 8
+        self.LMR_REDUCTION = 0
 
+        # --- These values are now calculated based on the new piece values ---
         self.EVAL_PIECE_VALUES_LST = [0] * (max(EVAL_PIECE_VALUES_RAW.keys()) + 1)
         for p_type, val in EVAL_PIECE_VALUES_RAW.items():
             self.EVAL_PIECE_VALUES_LST[p_type] = val
 
-        self.SEE_PIECE_VALUES = [0, 100, 320, 330, 500, 900, 20000] # P, N, B, R, Q, K
-        self._PIECE_VALUES_LST_NMP = [0, 100, 320, 330, 500, 900, 0] # King 0 for NMP material
+        self.SEE_PIECE_VALUES = [0] * 7
+        self.SEE_PIECE_VALUES[chess.PAWN] = EVAL_PIECE_VALUES_RAW[chess.PAWN]
+        self.SEE_PIECE_VALUES[chess.KNIGHT] = EVAL_PIECE_VALUES_RAW[chess.KNIGHT]
+        self.SEE_PIECE_VALUES[chess.BISHOP] = EVAL_PIECE_VALUES_RAW[chess.BISHOP]
+        self.SEE_PIECE_VALUES[chess.ROOK] = EVAL_PIECE_VALUES_RAW[chess.ROOK]
+        self.SEE_PIECE_VALUES[chess.QUEEN] = EVAL_PIECE_VALUES_RAW[chess.QUEEN]
+        self.SEE_PIECE_VALUES[chess.KING] = 20000
 
         self.TT_MOVE_ORDER_BONUS = 250000
         self.CAPTURE_BASE_ORDER_BONUS = 100000
@@ -90,8 +158,8 @@ class ChessAI:
         self.SEE_NEGATIVE_PENALTY_VALUE = -3500
         self.SEE_VALUE_SCALING_FACTOR = 8
         self.SEE_Q_PRUNING_THRESHOLD = -30
-
-        self.LMR_REDUCTION = 0
+        
+        self._SEE_PIECE_TYPES_SORTED = [chess.PAWN, chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN, chess.KING]
 
         self.init_zobrist_tables()
 
@@ -103,103 +171,81 @@ class ChessAI:
         self.zobrist_side = random.getrandbits(64)
         self.zobrist_white_checks = [random.getrandbits(64) for _ in range(11)] 
         self.zobrist_black_checks = [random.getrandbits(64) for _ in range(11)]
-        # --- OPTIMIZATION: Pre-calculate Zobrist hashes for checks ---
         self._zobrist_wc = self.zobrist_white_checks
         self._zobrist_bc = self.zobrist_black_checks
 
     def compute_hash(self, board: chess.Board, white_checks: int, black_checks: int) -> int:
         h = 0
-        for sq in CHESS_SQUARES:
-            piece = board.piece_at(sq)
-            if piece:
-                piece_idx = piece.piece_type - 1 + (6 if piece.color == chess.BLACK else 0)
-                h ^= self.zobrist_piece_square[sq][piece_idx]
+        for sq, piece in board.piece_map().items():
+            piece_idx = piece.piece_type - 1 + (6 if piece.color == chess.BLACK else 0)
+            h ^= self.zobrist_piece_square[sq][piece_idx]
         h ^= self.zobrist_castling[board.castling_rights & 0xF]
         if board.ep_square is not None:
             h ^= self.zobrist_ep[chess.square_file(board.ep_square)]
         if board.turn == chess.BLACK:
             h ^= self.zobrist_side
-        
-        # --- OPTIMIZATION: Use pre-calculated hashes ---
         if white_checks < 11:
             h ^= self._zobrist_wc[white_checks]
         if black_checks < 11:
             h ^= self._zobrist_bc[black_checks]
-            
         return h
 
-    # --- OPTIMIZATION: This function is no longer used, replaced by bitboard logic ---
-    # def get_side_material(self, board: chess.Board, color: chess.Color) -> int: ...
-
     def get_mvv_lva_score(self, board: chess.Board, move: chess.Move) -> int:
-        # --- OPTIMIZATION: Reduced function calls ---
         attacker_type = board.piece_type_at(move.from_square)
         victim_type = board.piece_type_at(move.to_square)
-        
-        if victim_type is None: # En-passant case
-            if move.promotion or not (board.is_en_passant(move)):
-                return 0
+        if victim_type is None:
+            if not board.is_en_passant(move): return 0
             victim_type = chess.PAWN
-        
         if attacker_type is None: return 0
-
-        # MVV-LVA: Most Valuable Victim - Least Valuable Attacker
         return self.EVAL_PIECE_VALUES_LST[victim_type] * 10 - self.EVAL_PIECE_VALUES_LST[attacker_type]
 
     def _get_lowest_attacker_see(self, board: chess.Board, to_sq: chess.Square, side: chess.Color) -> Optional[chess.Move]:
-        # --- OPTIMIZATION: Use bitboards directly for faster attacker generation ---
         attackers_mask = board.attackers_mask(side, to_sq)
         if not attackers_mask:
             return None
-
-        lowest_value = float('inf')
-        best_from_sq = -1
-
-        for piece_type in range(chess.PAWN, chess.KING + 1):
+        
+        for piece_type in self._SEE_PIECE_TYPES_SORTED:
             pieces = board.pieces_mask(piece_type, side) & attackers_mask
             if pieces:
-                from_sq = chess.msb(pieces) # Get the most significant bit (one of the attackers)
-                current_value = self.SEE_PIECE_VALUES[piece_type]
-                if current_value < lowest_value:
-                    lowest_value = current_value
-                    best_from_sq = from_sq
-        
-        if best_from_sq != -1:
-            return chess.Move(best_from_sq, to_sq)
+                from_sq = chess.msb(pieces)
+                return chess.Move(from_sq, to_sq)
         return None
 
     def see(self, board: chess.Board, move: chess.Move) -> int:
-        # ... (This function remains complex, but the helper it calls is now faster) ...
-        target_sq = move.to_square
         initial_attacker_piece = board.piece_at(move.from_square)
         if not initial_attacker_piece: return 0
         if board.is_en_passant(move):
             initial_victim_value = self.SEE_PIECE_VALUES[chess.PAWN]
         else:
-            initial_victim_piece = board.piece_at(target_sq)
+            initial_victim_piece = board.piece_at(move.to_square)
             if not initial_victim_piece: return 0
             initial_victim_value = self.SEE_PIECE_VALUES[initial_victim_piece.piece_type]
-        see_value_stack = [0] * 32; see_value_stack[0] = initial_victim_value; num_see_moves = 1
-        piece_on_target_val = self.SEE_PIECE_VALUES[move.promotion if move.promotion else initial_attacker_piece.piece_type]
+        
+        see_value_stack = [0] * 32
+        see_value_stack[0] = initial_victim_value
+        num_see_moves = 1
+        piece_on_target_val = self.SEE_PIECE_VALUES[move.promotion or initial_attacker_piece.piece_type]
+        
         temp_board = board.copy()
         try: temp_board.push(move)
         except AssertionError: return 0
-        while num_see_moves < 32:
-            recapture_side = temp_board.turn
-            recapture_move = self._get_lowest_attacker_see(temp_board, target_sq, recapture_side)
+
+        while True:
+            recapture_move = self._get_lowest_attacker_see(temp_board, move.to_square, temp_board.turn)
             if not recapture_move: break
             recapturing_piece = temp_board.piece_at(recapture_move.from_square)
             if not recapturing_piece: break
+            
             see_value_stack[num_see_moves] = piece_on_target_val
-            piece_on_target_val = self.SEE_PIECE_VALUES[recapture_move.promotion if recapture_move.promotion else recapturing_piece.piece_type]
+            piece_on_target_val = self.SEE_PIECE_VALUES[recapture_move.promotion or recapturing_piece.piece_type]
+            
             try: temp_board.push(recapture_move)
             except AssertionError: break
             num_see_moves += 1
+
         score = 0
         for i in range(num_see_moves - 1, -1, -1):
-            current_player_net_gain = see_value_stack[i] - score
-            if i > 0 and current_player_net_gain < 0: score = 0
-            else: score = current_player_net_gain
+            score = max(0, see_value_stack[i] - score)
         return score
 
     def get_move_score(self, board: chess.Board, move: chess.Move, is_capture: bool, gives_check: bool,
@@ -241,28 +287,20 @@ class ChessAI:
                     tt_move: Optional[chess.Move], ply: int,
                     white_checks: int, black_checks: int, max_checks: int,
                     qsearch_mode: bool = False) -> List[Tuple[chess.Move, bool, bool]]:
-        # --- OPTIMIZATION: Pre-calculate if a move gives check to avoid re-calculation ---
         moves_to_process_details = []
         for m in legal_moves_generator:
             is_c = board.is_capture(m)
             is_promo = m.promotion is not None
-            
-            # This is one of the most expensive checks. Do it once.
             gives_check = board.gives_check(m) 
 
             if qsearch_mode and not is_c and not is_promo and not gives_check:
                 continue
-            moves_to_process_details.append({'move': m, 'is_capture': is_c, 'gives_check': gives_check})
-
-        scored_move_data = []
-        for move_attrs in moves_to_process_details:
-            m = move_attrs['move']; is_c = move_attrs['is_capture']; g_c = move_attrs['gives_check']
-            current_score = self.get_move_score(board, m, is_c, g_c, tt_move, ply,
-                                               white_checks, black_checks, max_checks, qsearch_mode)
-            scored_move_data.append((current_score, m, is_c, g_c))
+            
+            score = self.get_move_score(board, m, is_c, gives_check, tt_move, ply, white_checks, black_checks, max_checks, qsearch_mode)
+            moves_to_process_details.append((score, m, is_c, gives_check))
         
-        scored_move_data.sort(key=lambda x: x[0], reverse=True)
-        return [(data[1], data[2], data[3]) for data in scored_move_data]
+        moves_to_process_details.sort(key=lambda x: x[0], reverse=True)
+        return [(data[1], data[2], data[3]) for data in moves_to_process_details]
 
     def evaluate_position(self, board: chess.Board, white_checks_delivered: int, black_checks_delivered: int, max_checks: int) -> int:
         outcome = board.outcome(claim_draw=True)
@@ -271,13 +309,14 @@ class ChessAI:
                 return self.CHECKMATE_SCORE if outcome.winner == chess.WHITE else -self.CHECKMATE_SCORE
             return 0
         material_positional_score = 0
-        for sq in CHESS_SQUARES:
-            piece = board.piece_at(sq)
-            if piece:
-                value = self.EVAL_PIECE_VALUES_LST[piece.piece_type]
-                pst_val = PST[piece.piece_type][sq if piece.color == chess.WHITE else chess.square_mirror(sq)]
-                if piece.color == chess.WHITE: material_positional_score += value + pst_val
-                else: material_positional_score -= (value + pst_val)
+        for sq, piece in board.piece_map().items():
+            value = self.EVAL_PIECE_VALUES_LST[piece.piece_type]
+            pst_val = PST[piece.piece_type][sq if piece.color == chess.WHITE else chess.square_mirror(sq)]
+            if piece.color == chess.WHITE:
+                material_positional_score += value + pst_val
+            else:
+                material_positional_score -= (value + pst_val)
+
         check_bonus_score = 0
         if EVAL_MAX_BONUS_FOR_N_MINUS_1_CHECKS > 0:
             if white_checks_delivered > 0 and white_checks_delivered < max_checks:
@@ -288,12 +327,15 @@ class ChessAI:
                 exponent = max_checks - black_checks_delivered - 1
                 bonus = EVAL_MAX_BONUS_FOR_N_MINUS_1_CHECKS * (EVAL_CHECK_BONUS_DECAY_RATE ** exponent)
                 check_bonus_score -= int(bonus)
+        
         current_player_threat_bonus = 0
-        if not board.is_game_over(claim_draw=True) and (white_checks_delivered < max_checks and black_checks_delivered < max_checks):
-            if any(board.gives_check(m) for m in board.legal_moves):
-                current_player_threat_bonus = EVAL_CHECK_THREAT_BONUS
-        if board.turn == chess.WHITE: material_positional_score += current_player_threat_bonus
-        else: material_positional_score -= current_player_threat_bonus
+        if any(board.gives_check(m) for m in board.legal_moves):
+            current_player_threat_bonus = EVAL_CHECK_THREAT_BONUS
+        if board.turn == chess.WHITE:
+            material_positional_score += current_player_threat_bonus
+        else:
+            material_positional_score -= current_player_threat_bonus
+            
         return material_positional_score + check_bonus_score
 
     def quiescence_search(self, board: chess.Board, alpha: int, beta: int, maximizing_player: bool,
@@ -323,9 +365,10 @@ class ChessAI:
             board.pop()
             if maximizing_player:
                 alpha = max(alpha, score)
+                if alpha >= beta: break
             else:
                 beta = min(beta, score)
-            if alpha >= beta: break
+                if beta <= alpha: break
         return alpha if maximizing_player else beta
 
     def store_in_tt(self, key: int, depth: int, value: int, flag: int, best_move: Optional[chess.Move]):
