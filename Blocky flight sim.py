@@ -5,7 +5,8 @@ import math
 import random
 import numpy as np
 
-# Initialize Pygame
+# Blocky Flight Simulator 1.0
+
 pygame.init()
 
 # --- Main Constants ---
