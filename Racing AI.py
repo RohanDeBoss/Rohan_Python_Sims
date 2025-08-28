@@ -15,10 +15,10 @@ VISION_CONE_ANGLE = math.pi * 0.8  # Narrower: 144 degrees instead of 225
 
 CONSTANT_SPEED = 320  # Set a single constant speed for all cars
 
-GENERATION_DURATION = 20 / 2 # 20 Seconds
+# Corrected Timings: GENERATION_DURATION is now a simple 20 seconds.
+GENERATION_DURATION = 20
 
-# With a frame-based duration
-GENERATION_FRAMES = GENERATION_DURATION * 60  # 15 seconds at 60 fps
+# NOTE: GENERATION_FRAMES is no longer used for timing the simulation.
 
 CAR_WIDTH = 22
 CAR_HEIGHT = 11
@@ -106,22 +106,22 @@ def generate_ellipse_segments(center, a, b, num_segments):
 def generate_square_track(center, size, track_width):
 
     cx, cy = center
-    
+
     # Make the track longer by applying a multiplier to the horizontal dimension
     length_multiplier = 1.5  # Adjust this to make the track longer
-    
+
     # Make the track skinnier by reducing the track width
     skinnier_factor = 0.95  # Adjust this to make the track skinnier
     adjusted_track_width = track_width * skinnier_factor
-    
+
     # Define the dimensions for outer boundary
     outer_width = size * length_multiplier
     outer_height = size
-    
+
     # Define the dimensions for inner boundary
     inner_width = outer_width - adjusted_track_width
     inner_height = outer_height - adjusted_track_width
-    
+
     # Define the exact points for the outer and inner rectangles
     # Outer rectangle corners (clockwise from top-left)
     outer_corners = [
@@ -130,7 +130,7 @@ def generate_square_track(center, size, track_width):
         (cx + outer_width, cy + outer_height),  # bottom-right
         (cx - outer_width, cy + outer_height),  # bottom-left
     ]
-    
+
     # Inner rectangle corners (clockwise from top-left)
     inner_corners = [
         (cx - inner_width, cy - inner_height),  # top-left
@@ -138,12 +138,12 @@ def generate_square_track(center, size, track_width):
         (cx + inner_width, cy + inner_height),  # bottom-right
         (cx - inner_width, cy + inner_height),  # bottom-left
     ]
-    
+
     # Number of points to generate along each edge for smoother rendering
     # Use more points for longer edges
     points_per_short_edge = 20
     points_per_long_edge = int(points_per_short_edge * length_multiplier)
-    
+
     # Generate points along the outer rectangle
     outer_points = []
     # Top edge (longer)
@@ -152,28 +152,28 @@ def generate_square_track(center, size, track_width):
         x = outer_corners[0][0] + t * (outer_corners[1][0] - outer_corners[0][0])
         y = outer_corners[0][1]
         outer_points.append((x, y))
-    
+
     # Right edge (shorter)
     for j in range(points_per_short_edge):
         t = j / points_per_short_edge
         x = outer_corners[1][0]
         y = outer_corners[1][1] + t * (outer_corners[2][1] - outer_corners[1][1])
         outer_points.append((x, y))
-    
+
     # Bottom edge (longer)
     for j in range(points_per_long_edge):
         t = j / points_per_long_edge
         x = outer_corners[2][0] - t * (outer_corners[2][0] - outer_corners[3][0])
         y = outer_corners[2][1]
         outer_points.append((x, y))
-    
+
     # Left edge (shorter)
     for j in range(points_per_short_edge):
         t = j / points_per_short_edge
         x = outer_corners[3][0]
         y = outer_corners[3][1] - t * (outer_corners[3][1] - outer_corners[0][1])
         outer_points.append((x, y))
-    
+
     # Generate points along the inner rectangle
     inner_points = []
     # Top edge (longer)
@@ -182,48 +182,48 @@ def generate_square_track(center, size, track_width):
         x = inner_corners[0][0] + t * (inner_corners[1][0] - inner_corners[0][0])
         y = inner_corners[0][1]
         inner_points.append((x, y))
-    
+
     # Right edge (shorter)
     for j in range(points_per_short_edge):
         t = j / points_per_short_edge
         x = inner_corners[1][0]
         y = inner_corners[1][1] + t * (inner_corners[2][1] - inner_corners[1][1])
         inner_points.append((x, y))
-    
+
     # Bottom edge (longer)
     for j in range(points_per_long_edge):
         t = j / points_per_long_edge
         x = inner_corners[2][0] - t * (inner_corners[2][0] - inner_corners[3][0])
         y = inner_corners[2][1]
         inner_points.append((x, y))
-    
+
     # Left edge (shorter)
     for j in range(points_per_short_edge):
         t = j / points_per_short_edge
         x = inner_corners[3][0]
         y = inner_corners[3][1] - t * (inner_corners[3][1] - inner_corners[0][1])
         inner_points.append((x, y))
-    
+
     # Generate centerline points by averaging inner and outer points
     centerline_points = []
     for i in range(len(outer_points)):
         x = (outer_points[i][0] + inner_points[i][0]) / 2
         y = (outer_points[i][1] + inner_points[i][1]) / 2
         centerline_points.append((x, y))
-    
+
     # Create walls for inner and outer boundaries
     walls = []
-    
+
     # Create walls along outer boundary
     for i in range(len(outer_points)):
         j = (i + 1) % len(outer_points)
         walls.append([outer_points[i], outer_points[j]])
-    
+
     # Create walls along inner boundary
     for i in range(len(inner_points)):
         j = (i + 1) % len(inner_points)
         walls.append([inner_points[i], inner_points[j]])
-    
+
     # Create road polygon
     road_poly = []
     # Add outer points in order
@@ -232,9 +232,9 @@ def generate_square_track(center, size, track_width):
     # Add inner points in reverse order to create a continuous polygon
     for p in reversed(inner_points):
         road_poly.append(p)
-    
+
     road_polygons = [road_poly]
-    
+
     # Create checkpoints - perpendicular lines across track at regular intervals
     checkpoints = []
     total_points = len(outer_points)
@@ -251,7 +251,7 @@ def generate_square_track(center, size, track_width):
     dx = p1[0] - p0[0]
     dy = p1[1] - p0[1]
     start_angle = math.atan2(dy, dx)
-    
+
     return walls, road_polygons, checkpoints, start_pos, start_angle
 
 def set_track(track_type):
@@ -324,15 +324,15 @@ def menu():
                     return "impossible"
         screen.fill(WHITE)
         title_text = FONT_MEDIUM.render("Select Track Difficulty", True, BLACK)
-        screen.blit(title_text, (SIM_WIDTH / 2 - title_text.get_width() / 2, 100))
+        screen.blit(title_text, (WIDTH / 2 - title_text.get_width() / 2, 100))
         option1 = FONT_SMALL.render("1 - Easy (Circle Track)", True, BLACK)
         option2 = FONT_SMALL.render("2 - Medium (Oval Track)", True, BLACK)
         option3 = FONT_SMALL.render("3 - Hard (Square Track)", True, BLACK)
         option4 = FONT_SMALL.render("4 - Impossible (Random Track Each Generation)", True, BLACK)
-        screen.blit(option1, (SIM_WIDTH / 2 - option1.get_width() / 2, 200))
-        screen.blit(option2, (SIM_WIDTH / 2 - option2.get_width() / 2, 240))
-        screen.blit(option3, (SIM_WIDTH / 2 - option3.get_width() / 2, 280))
-        screen.blit(option4, (SIM_WIDTH / 2 - option4.get_width() / 2, 320))
+        screen.blit(option1, (WIDTH / 2 - option1.get_width() / 2, 200))
+        screen.blit(option2, (WIDTH / 2 - option2.get_width() / 2, 240))
+        screen.blit(option3, (WIDTH / 2 - option3.get_width() / 2, 280))
+        screen.blit(option4, (WIDTH / 2 - option4.get_width() / 2, 320))
         pygame.display.flip()
         clock.tick(60)
 
@@ -344,13 +344,13 @@ class NeuralNetwork:
         # Smaller hidden layer: approximately mean of input and output size
         self.hidden_size = 14
         self.output_size = 3  # Keep the same (left, straight, right)
-        
+
         # Initialize weights with He initialization
         self.w1 = np.random.randn(self.input_size, self.hidden_size) * np.sqrt(2.0 / self.input_size)
         self.b1 = np.zeros(self.hidden_size)
         self.w2 = np.random.randn(self.hidden_size, self.output_size) * np.sqrt(2.0 / self.hidden_size)
         self.b2 = np.zeros(self.output_size)
-    
+
     def forward(self, x):
         # ReLU activation for hidden layer
         self.h = np.maximum(0, np.dot(x, self.w1) + self.b1)
@@ -359,7 +359,7 @@ class NeuralNetwork:
         exp_o = np.exp(o - np.max(o))
         self.probs = exp_o / np.sum(exp_o)
         return self.probs
-    
+
     def mutate(self, mutation_rate=MUTATION_RATE, mutation_strength=MUTATION_STRENGTH):
         new_nn = self.clone()
         # Apply mutations with decaying strength based on network performance
@@ -375,12 +375,12 @@ class NeuralNetwork:
         # Randomly choose weights from either parent
         mask1 = np.random.rand(*self.w1.shape) < 0.5
         mask2 = np.random.rand(*self.w2.shape) < 0.5
-        
+
         child.w1 = np.where(mask1, self.w1, other.w1)
         child.b1 = np.where(np.random.rand(*self.b1.shape) < 0.5, self.b1, other.b1)
         child.w2 = np.where(mask2, self.w2, other.w2)
         child.b2 = np.where(np.random.rand(*self.b2.shape) < 0.5, self.b2, other.b2)
-        
+
         return child
 
     def clone(self):
@@ -416,7 +416,7 @@ class Car:
         self.position_history = deque(maxlen=60)  # Track position history
         self.crashes = 0  # Count number of crashes
         self.start_time = pygame.time.get_ticks()
-        
+
         # Initialize position history
         for _ in range(10):
             self.position_history.append((self.x, self.y))
@@ -426,17 +426,17 @@ class Car:
         cp = checkpoints[next_cp_idx]
         cp_x = (cp[0][0] + cp[1][0]) / 2
         cp_y = (cp[0][1] + cp[1][1]) / 2
-        
+
         # Calculate angle to checkpoint
         dx = cp_x - self.x
         dy = cp_y - self.y
         cp_angle = math.atan2(dy, dx)
-        
+
         # Calculate relative angle (-π to π)
         rel_angle = (cp_angle - self.angle) % (2 * math.pi)
         if rel_angle > math.pi:
             rel_angle -= 2 * math.pi
-            
+
         return rel_angle / math.pi  # Normalize to range [-1, 1]
 
     def cast_rays(self):
@@ -464,21 +464,21 @@ class Car:
     def decide_actions(self):
         # Create simplified input vector
         inputs = self.cast_rays()
-        
+
         # Add additional inputs: current steering angle, progress, and angle to next checkpoint
         # Removed normalized_speed
         normalized_steering = self.steering_angle / MAX_STEERING_ANGLE  # Normalize to [-1,1]
         checkpoint_progress = self.current_checkpoint / len(checkpoints)  # Progress through track
         checkpoint_angle = self.calculate_angle_to_next_checkpoint()
-        
+
         # Combine all inputs
         input_vector = np.concatenate([
-            inputs, 
-            [normalized_steering, 
-            checkpoint_progress, 
+            inputs,
+            [normalized_steering,
+            checkpoint_progress,
             checkpoint_angle]
         ])
-        
+
         # Get NN outputs - only steering outputs
         outputs = self.nn.forward(input_vector)
         steering_outputs = outputs  # Left, Straight, Right
@@ -497,10 +497,10 @@ class Car:
             # Save previous position
             self.prev_x = self.x
             self.prev_y = self.y
-            
+
             # Speed is now constant
             self.speed = CONSTANT_SPEED
-            
+
             # Add current position to rolling history
             self.avg_speed.append(self.speed)
 
@@ -515,7 +515,7 @@ class Car:
 
             # Track position history for stalling detection
             self.position_history.append((self.x, self.y))
-            
+
             # Calculate distance traveled (automatically delta_time-aware)
             self.distance_traveled += math.hypot(
                 self.x - self.prev_x,
@@ -527,12 +527,12 @@ class Car:
                 self.alive = False
                 self.crashes += 1
                 self.fitness -= CRASH_PENALTY  # Apply crash penalty
-            
+
             # Update checkpoint progress
             self.prev_checkpoint = self.current_checkpoint
             if self.check_checkpoint():
                 new_checkpoint = (self.current_checkpoint + 1) % len(checkpoints)
-                
+
                 # Check if going backwards
                 if new_checkpoint != (self.current_checkpoint + 1) % len(checkpoints):
                     self.wrong_way = True
@@ -543,28 +543,28 @@ class Car:
                     current_time = pygame.time.get_ticks() - self.start_time
                     self.checkpoint_times[self.current_checkpoint] = current_time
                     self.last_checkpoint_time = pygame.time.get_ticks()  # Reset timer
-                    
+
                     # Reward for reaching a new checkpoint
                     self.fitness += 10
                     self.raw_fitness += 1
-                    
+
                     # Check for lap completion
                     if self.current_checkpoint == 0 and self.prev_checkpoint == len(checkpoints) - 1:
                         self.lap_count += 1
                         self.fitness += 50  # Bonus for completing a lap
-            
+
             # Check if car takes too long to reach the next checkpoint
             current_time = pygame.time.get_ticks()
             if current_time - self.last_checkpoint_time > 5000 and self.alive:
                 self.alive = False
                 self.fitness -= 10  # Optional penalty for timing out
-            
+
             # Check for stalling/lack of progress
             if len(self.position_history) >= 60:
                 oldest_pos = self.position_history[0]
                 current_pos = self.position_history[-1]
                 distance_moved = math.hypot(current_pos[0] - oldest_pos[0], current_pos[1] - oldest_pos[1])
-                
+
                 if distance_moved < 30:  # If car hasn't moved much in the last 60 frames
                     self.idle_time += 1
                     if self.idle_time > 120:  # If car has been idle for 2 seconds (120 frames)
@@ -572,7 +572,7 @@ class Car:
                         self.fitness -= 20  # Penalty for stalling
                 else:
                     self.idle_time = 0
-                
+
 
     def check_collision(self):
         car_path = [(self.prev_x, self.prev_y), (self.x, self.y)]
@@ -611,30 +611,31 @@ def draw_track():
 
 def draw_performance_graph(rect, stats):
     x, y, w, h = rect
-    
+
     # Draw background and border
     pygame.draw.rect(screen, WHITE, rect)
     pygame.draw.rect(screen, BLACK, rect, 1)
-    
+
     # Title
     title = FONT_SMALL.render("Performance History", True, BLACK)
     screen.blit(title, (x + (w - title.get_width()) // 2, y + 5))
-    
+
     if len(stats) < 2:
         msg = FONT_SMALL.render("Collecting data...", True, (100, 100, 100))
         screen.blit(msg, (x + (w - msg.get_width()) // 2, y + h // 2))
         return
-    
+
     # Extract data with validation
+    y_min = 0.0
     generations = [s['generation'] for s in stats]
     best_fitness = []
     avg_fitness = []
     for s in stats:
         bf = s['best_fitness']
-        best_fitness.append(bf if math.isfinite(bf) else y_min)  # Fixed here
+        best_fitness.append(bf if math.isfinite(bf) else y_min)
         af = s['avg_fitness']
-        avg_fitness.append(af if math.isfinite(af) else y_min)    # Fixed here
-    
+        avg_fitness.append(af if math.isfinite(af) else y_min)
+
     # Calculate y-axis bounds with safety checks
     valid_best = [f for f in best_fitness if math.isfinite(f)]
     valid_avg = [f for f in avg_fitness if math.isfinite(f)]
@@ -644,16 +645,15 @@ def draw_performance_graph(rect, stats):
         y_max = max(max_best, max_avg) * 1.1
     else:
         y_max = 1.0  # Default value if all are invalid
-    
-    y_min = 0.0  # Explicitly define y_min
+
     if y_max <= y_min:
         y_max = y_min + 1.0
-    
+
     graph_x = x + 40
     graph_y = y + 25
     graph_w = w - 50
     graph_h = h - 60
-    
+
     # Draw axes
     pygame.draw.line(screen, BLACK, (graph_x, graph_y), (graph_x, graph_y + graph_h), 1)
     pygame.draw.line(screen, BLACK, (graph_x, graph_y + graph_h), (graph_x + graph_w, graph_y + graph_h), 1)
@@ -663,7 +663,7 @@ def draw_performance_graph(rect, stats):
         fraction = i / 4.0
         value = y_min + fraction * (y_max - y_min)
         y_pos = graph_y + graph_h - int(fraction * graph_h)
-        
+
         label = FONT_SMALL.render(f"{value:.0f}", True, BLACK)
         screen.blit(label, (graph_x - label.get_width() - 5, y_pos - label.get_height() // 2))
 
@@ -677,7 +677,7 @@ def draw_performance_graph(rect, stats):
         denominator = denominator if denominator != 0 else 1
         fraction = (gen_label - generations[0]) / denominator
         x_pos = graph_x + int(fraction * graph_w)
-        
+
         label = FONT_SMALL.render(f"{gen_label}", True, BLACK)
         screen.blit(label, (x_pos - label.get_width() // 2, graph_y + graph_h + 5))
 
@@ -710,60 +710,60 @@ def draw_performance_graph(rect, stats):
         pygame.draw.lines(screen, (0, 200, 0), False, avg_points, 2)
 
     # Legend (moved further left)
-    legend_x = graph_x - 140  # Shifted left by 60px from graph's left edge
+    legend_x = graph_x - 140
     legend_y = graph_y + 150
     line_length = 20
 
     # Best fitness legend
-    pygame.draw.line(screen, (0, 0, 255), 
-                    (legend_x, legend_y), 
+    pygame.draw.line(screen, (0, 0, 255),
+                    (legend_x, legend_y),
                     (legend_x + line_length, legend_y), 2)
     best_label = FONT_SMALL.render("Best", True, (0, 0, 255))
-    screen.blit(best_label, (legend_x + line_length + 8, legend_y - 8))  # 8px padding
+    screen.blit(best_label, (legend_x + line_length + 8, legend_y - 8))
 
     # Average fitness legend
-    legend_y += 25  # Vertical spacing between entries
-    pygame.draw.line(screen, (0, 200, 0), 
-                    (legend_x, legend_y), 
+    legend_y += 25
+    pygame.draw.line(screen, (0, 200, 0),
+                    (legend_x, legend_y),
                     (legend_x + line_length, legend_y), 2)
     avg_label = FONT_SMALL.render("Average", True, (0, 200, 0))
     screen.blit(avg_label, (legend_x + line_length + 8, legend_y - 8))
-    
+
 def draw_neural_network(panel_rect, nn, inputs):
     if not hasattr(nn, 'h') or not hasattr(nn, 'probs'):
         # If forward hasn't been called yet, run a forward pass
         nn.forward(inputs)
-    
+
     h = nn.h
     probs = nn.probs
-    
+
     panel_x, panel_y, panel_w, panel_h = panel_rect
-    
+
     # Adjust node positions for the smaller panel
     input_x = panel_x + 40
     hidden_x = panel_x + panel_w // 2
     output_x = panel_x + panel_w - 40
-    
+
     n_input = nn.input_size
     n_hidden = nn.hidden_size
     n_output = nn.output_size
-    
+
     spacing_input = panel_h / (n_input + 1)
     spacing_hidden = panel_h / (n_hidden + 1)
     spacing_output = panel_h / (n_output + 1)
-    
+
     input_neurons = [(input_x, panel_y + (i + 1) * spacing_input) for i in range(n_input)]
     hidden_neurons = [(hidden_x, panel_y + (i + 1) * spacing_hidden) for i in range(n_hidden)]
     output_neurons = [(output_x, panel_y + (i + 1) * spacing_output) for i in range(n_output)]
-    
+
     # Draw panel background
     pygame.draw.rect(screen, WHITE, panel_rect)
     pygame.draw.rect(screen, BLACK, panel_rect, 1)
-    
+
     # Draw title
     title = FONT_SMALL.render("Neural Network", True, BLACK)
     screen.blit(title, (panel_x + (panel_w - title.get_width()) // 2, panel_y - 20))
-    
+
     # Draw connections (simplified to reduce visual clutter)
     for i, inp_pos in enumerate(input_neurons):
         for j, hid_pos in enumerate(hidden_neurons):
@@ -772,7 +772,7 @@ def draw_neural_network(panel_rect, nn, inputs):
                 color = BLUE if weight > 0 else RED
                 width = max(1, int(abs(weight) * 2))
                 pygame.draw.line(screen, color, inp_pos, hid_pos, width)
-    
+
     for i, hid_pos in enumerate(hidden_neurons):
         for j, out_pos in enumerate(output_neurons):
             weight = nn.w2[i, j]
@@ -780,10 +780,10 @@ def draw_neural_network(panel_rect, nn, inputs):
                 color = BLUE if weight > 0 else RED
                 width = max(1, int(abs(weight) * 2))
                 pygame.draw.line(screen, color, hid_pos, out_pos, width)
-    
+
     # Draw nodes with smaller size
     node_size = 4
-    
+
     # Draw input neurons
     for i, pos in enumerate(input_neurons):
         if i < NUM_RAYS:
@@ -795,14 +795,14 @@ def draw_neural_network(panel_rect, nn, inputs):
             color_val = int(abs(activation) * 255)
             pygame.draw.circle(screen, (0, color_val, color_val), pos, node_size)
         pygame.draw.circle(screen, BLACK, pos, node_size, 1)
-    
+
     # Draw hidden neurons
     for i, pos in enumerate(hidden_neurons):
         activation = h[i]
         color_val = int(min(activation, 1) * 255)
         pygame.draw.circle(screen, (0, color_val, 0), pos, node_size)
         pygame.draw.circle(screen, BLACK, pos, node_size, 1)
-    
+
     # Draw output neurons with smaller labels
     output_labels = ["L", "S", "R"]  # Only steering labels
     for i, pos in enumerate(output_neurons):
@@ -810,7 +810,7 @@ def draw_neural_network(panel_rect, nn, inputs):
         color_val = int(activation * 255)
         pygame.draw.circle(screen, (0, 0, color_val), pos, node_size + 2)
         pygame.draw.circle(screen, BLACK, pos, node_size + 2, 1)
-        
+
         # Add output labels
         label = output_labels[i]
         text = FONT_SMALL.render(label, True, BLACK)
@@ -827,8 +827,7 @@ def draw_car(car, is_best=False):
         color = (100, 100, 100)  # Grey for dead non-leading cars
     else:
         color = RED              # Red for alive non-leading cars
-    
-    # Draw the car body (example implementation, adjust as needed)
+
     w, h = CAR_WIDTH, CAR_HEIGHT
     local_corners = [(-w/2, -h/2), (w/2, -h/2), (w/2, h/2), (-w/2, h/2)]
     rotated = []
@@ -838,21 +837,19 @@ def draw_car(car, is_best=False):
         rotated.append((car.x + rx, car.y + ry))
     pygame.draw.polygon(screen, color, rotated)
     pygame.draw.polygon(screen, BLACK, rotated, 1)
-    
+
     # Draw front direction indicator
     front_x = car.x + (w/2) * math.cos(car.angle)
     front_y = car.y + (w/2) * math.sin(car.angle)
     pygame.draw.circle(screen, BLACK, (int(front_x), int(front_y)), 3)
 
 # Enhanced Selection Methods
-def tournament_selection(cars, k=5):  # Changed k from 3 to 5
-    """Tournament selection: randomly select k cars and return the best one"""
-    selected = random.sample(cars, k)  # Using random.sample for efficiency
+def tournament_selection(cars, k=5):
+    selected = random.sample(cars, k)
     return max(selected, key=lambda car: car.fitness)
 
 def roulette_wheel_selection(cars):
-    """Roulette wheel selection based on fitness"""
-    total_fitness = sum(max(0.1, car.fitness) for car in cars)  # Avoid negative fitness
+    total_fitness = sum(max(0.1, car.fitness) for car in cars)
     if total_fitness <= 0:
         return random.choice(cars)
     pick = random.uniform(0, total_fitness)
@@ -861,236 +858,212 @@ def roulette_wheel_selection(cars):
         current += max(0.1, car.fitness)
         if current >= pick:
             return car
-    return cars[-1]  # Fallback to the last car
+    return cars[-1]
 
 def select_parents(cars, selection_method="tournament"):
-    """Select parents for reproduction using the specified method"""
     if selection_method == "tournament":
         return tournament_selection(cars)
     else:
         return roulette_wheel_selection(cars)
 
 def elitism(cars, count=5):
-    """Select the top performing cars to keep unchanged"""
     sorted_cars = sorted(cars, key=lambda x: x.fitness, reverse=True)
     return [car.nn.clone() for car in sorted_cars[:count]]
 
 def run_simulation():
-    global walls, checkpoints, road_polygons, start_pos, start_angle
-    generation_frame_count = 0
+    # This function is now the main application loop, managing menu and simulation states.
+    while True:
+        # Part 1: MENU
+        # ==================================
+        track_type = menu()
 
-    # Select difficulty from menu
-    track_type = menu()
-    
-    # Define track options based on difficulty
-    if track_type == "impossible":
-        track_options = ["easy", "medium", "hard"]
-        current_track = random.choice(track_options)  # Initial random track
-        previous_track = current_track  # Track the previous track
-    else:
-        track_options = [track_type]
-        current_track = track_type
-        previous_track = None  # No need to track for fixed tracks
-    
-    # Set up the initial track
-    set_track(current_track)
-
-    # Initialize first generation of cars with random NNs
-    cars = [Car(NeuralNetwork()) for _ in range(NUM_CARS)]
-    is_first_frame = True
-    generation = 1
-    best_fitness = -float('inf')
-    best_nn = None
-    
-    # Generation timer
-    generation_start_time = pygame.time.get_ticks()
-    
-    # Statistics tracking
-    generation_stats = []
-    
-    running = True
-    paused = False
-    show_all_cars = True
-    
-    while running:
-        delta_time = clock.tick(60) / 1000.0
-        generation_frame_count += 1
-
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_SPACE:
-                    paused = not paused
-                elif event.key == pygame.K_a:
-                    show_all_cars = not show_all_cars
-                elif event.key == pygame.K_n:
-                    generation_start_time = 0
-        
-        if paused:
-            pygame.time.delay(100)
-            continue
-
-        screen.fill(WHITE)
-        draw_track()
-        
-        if not is_first_frame:
-            alive_count = 0
-            for car in cars:
-                if car.alive:
-                    car.decide_actions()
-                    car.update(delta_time)
-                    alive_count += 1
-        else:
-            alive_count = NUM_CARS
-
-        if cars:
-            best_car = max(cars, key=lambda car: car.fitness)
-            best_fitness_current = best_car.fitness
-        else:
-            best_car = None
-            best_fitness_current = -float('inf')
-        
-        if show_all_cars:
-            for car in cars:
-                draw_car(car, is_best=(car == best_car))
-        elif best_car:
-            draw_car(best_car, is_best=True)
-        
-        if is_first_frame:
-            is_first_frame = False
-        
-        if best_fitness_current > best_fitness:
-            best_fitness = best_fitness_current
-            if best_car:
-                best_nn = best_car.nn.clone()
-        
-        if best_car:
-            ray_distances = best_car.cast_rays()
-            normalized_steering = best_car.steering_angle / MAX_STEERING_ANGLE
-            checkpoint_progress = best_car.current_checkpoint / len(checkpoints)
-            checkpoint_angle = best_car.calculate_angle_to_next_checkpoint()
-            inputs = np.concatenate([ray_distances, [normalized_steering, checkpoint_progress, checkpoint_angle]])
-            draw_neural_network(NN_PANEL_RECT, best_car.nn, inputs)
-            draw_performance_graph(GRAPH_RECT, generation_stats)
-        
-        stats = [
-            f"FPS: {clock.get_fps():.1f}",
-            f"Generation: {generation}",
-            f"Time: {(generation_frame_count / 60) * 2:.2f}s/{(GENERATION_FRAMES / 60) * 2:.2f}s ({(generation_frame_count / GENERATION_FRAMES) * 100:.0f}%)",
-            f"Cars Alive: {alive_count}/{NUM_CARS}",
-            f"Best Fitness: {best_fitness:.2f}",
-            f"Current Best: {best_fitness_current:.2f}",
-        ]
-        if best_car:
-            stats.extend([
-                f"Speed: {best_car.speed:.2f}",
-                f"Lap Count: {best_car.lap_count}",
-                f"Checkpoint: {best_car.current_checkpoint}/{len(checkpoints)}",
-                f"Distance: {best_car.distance_traveled:.1f}"
-            ])
+        # Part 2: SIMULATION SETUP
+        # ==================================
         if track_type == "impossible":
-            stats.append(f"Current Track: {current_track}")
-        
-        for i, text in enumerate(stats):
-            text_surface = FONT_SMALL.render(text, True, BLACK)
-            screen.blit(text_surface, (10, 10 + i * 24))
-        
-        current_time = pygame.time.get_ticks()
-        generation_elapsed = current_time - generation_start_time
-        
-        if generation_frame_count >= GENERATION_FRAMES or alive_count == 0:
-            best_fitness_current = max(car.fitness for car in cars)
-            avg_fitness = sum(car.fitness for car in cars) / NUM_CARS
-            generation_stats.append({
-                'generation': generation,
-                'best_fitness': best_fitness_current,
-                'avg_fitness': avg_fitness,
-                'alive_count': alive_count
-            })
-            
-            # Randomize track for impossible mode, ensuring no consecutive repeats
-            if track_type == "impossible":
-                available_tracks = [t for t in track_options if t != previous_track]
-                new_track = random.choice(available_tracks)
-                current_track = new_track
-                previous_track = current_track
-                set_track(current_track)
-            else:
-                set_track(current_track)  # Re-set the track, though it's the same
-            
-            # Create next generation
-            new_generation = []
-            
-            # Elitism: keep the best performers
-            elite_count = max(3, NUM_CARS // 10)
-            elite_nns = elitism(cars, elite_count)
-            for nn in elite_nns:
-                new_generation.append(Car(nn))
-            
-            # Add mutants of the top cars
-            top_cars = sorted(cars, key=lambda x: x.fitness, reverse=True)[:5]
-            for i, top_car in enumerate(top_cars):
-                num_mutants = 2
-                if i == 0:
-                    num_mutants += 2
-                for _ in range(num_mutants):
-                    mutant_nn = top_car.nn.mutate()
-                    new_generation.append(Car(mutant_nn))
-            
-            # Fill rest with crossover offspring
-            while len(new_generation) < NUM_CARS:
-                parent1 = select_parents(cars, "tournament")
-                parent2 = select_parents(cars, "tournament")
-                
-                if random.random() < 0.85:
-                    child_nn = parent1.nn.crossover(parent2.nn)
-                else:
-                    child_nn = parent1.nn.clone() if random.random() < 0.5 else parent2.nn.clone()
-                
-                mutation_rate = MUTATION_RATE * (1.0 - min(0.5, generation / 100))
-                child_nn = child_nn.mutate(mutation_rate=mutation_rate)
-                
-                new_generation.append(Car(child_nn))
-            
-            # Reset cars for the new generation and track
-            cars = new_generation
-            for car in cars:
-                car.x, car.y = start_pos
-                car.angle = start_angle
-                car.alive = True
-                car.fitness = 0
-                car.raw_fitness = 0
-                car.distance_traveled = 0
-                car.current_checkpoint = 0
-                car.prev_checkpoint = 0
-                car.lap_count = 0
-                car.prev_x = car.x
-                car.prev_y = car.y
-                car.idle_time = 0
-                car.wrong_way = False
-                car.crashes = 0
-                car.start_time = pygame.time.get_ticks()
-                car.checkpoint_times.clear()
-                car.position_history.clear()
-                car.avg_speed.clear()
-                for _ in range(10):
-                    car.position_history.append((car.x, car.y))
-            
-            generation += 1
-            generation_frame_count = 0
-            is_first_frame = True
-            
-            gen_msg = f"Generation {generation} started!"
-            gen_text = FONT_MEDIUM.render(gen_msg, True, BLUE)
-            screen.blit(gen_text, (SIM_WIDTH // 2 - gen_text.get_width() // 2, 50))
-            pygame.display.flip()
-            pygame.time.delay(1000)
-        
-        pygame.display.flip()
-        delta_time = clock.tick(60) / 1000.0
+            track_options = ["easy", "medium", "hard"]
+            current_track = random.choice(track_options)
+            previous_track = current_track
+        else:
+            track_options = [track_type]
+            current_track = track_type
+            previous_track = None
 
-    pygame.quit()
+        set_track(current_track)
+
+        cars = [Car(NeuralNetwork()) for _ in range(NUM_CARS)]
+        is_first_frame = True
+        generation = 1
+        best_fitness = -float('inf')
+        generation_stats = []
+        paused = False
+        show_all_cars = True
+
+        # Back Button Setup
+        back_button_rect = pygame.Rect(10, SIM_HEIGHT - 40, 160, 30)
+        back_button_color = (220, 220, 220)
+        back_button_hover_color = (200, 200, 200)
+
+        # Real-time generation timer
+        generation_start_time = pygame.time.get_ticks()
+
+        # Part 3: SIMULATION LOOP
+        # ==================================
+        simulation_running = True
+        while simulation_running:
+            delta_time = clock.tick(60) / 1000.0
+
+            # Event Handling
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        simulation_running = False  # Exit to menu
+                    elif event.key == pygame.K_SPACE:
+                        paused = not paused
+                    elif event.key == pygame.K_a:
+                        show_all_cars = not show_all_cars
+                    elif event.key == pygame.K_n:
+                        # Setting start time to 0 makes elapsed time large, ending generation.
+                        generation_start_time = 0
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    if back_button_rect.collidepoint(event.pos):
+                        simulation_running = False # Exit to menu
+
+            if paused:
+                pygame.time.delay(100)
+                continue
+
+            screen.fill(WHITE)
+            draw_track()
+
+            alive_count = 0
+            if not is_first_frame:
+                for car in cars:
+                    if car.alive:
+                        car.decide_actions()
+                        car.update(delta_time)
+                        alive_count += 1
+            else:
+                alive_count = NUM_CARS
+
+            best_car = max(cars, key=lambda car: car.fitness) if cars else None
+            best_fitness_current = best_car.fitness if best_car else -float('inf')
+
+            if show_all_cars:
+                for car in cars:
+                    draw_car(car, is_best=(car == best_car))
+            elif best_car:
+                draw_car(best_car, is_best=True)
+
+            if is_first_frame:
+                is_first_frame = False
+
+            if best_fitness_current > best_fitness:
+                best_fitness = best_fitness_current
+
+            if best_car:
+                ray_distances = best_car.cast_rays()
+                normalized_steering = best_car.steering_angle / MAX_STEERING_ANGLE
+                checkpoint_progress = best_car.current_checkpoint / len(checkpoints)
+                checkpoint_angle = best_car.calculate_angle_to_next_checkpoint()
+                inputs = np.concatenate([ray_distances, [normalized_steering, checkpoint_progress, checkpoint_angle]])
+                draw_neural_network(NN_PANEL_RECT, best_car.nn, inputs)
+                draw_performance_graph(GRAPH_RECT, generation_stats)
+
+            # Draw Back Button
+            mouse_pos = pygame.mouse.get_pos()
+            if back_button_rect.collidepoint(mouse_pos):
+                pygame.draw.rect(screen, back_button_hover_color, back_button_rect, border_radius=5)
+            else:
+                pygame.draw.rect(screen, back_button_color, back_button_rect, border_radius=5)
+            pygame.draw.rect(screen, BLACK, back_button_rect, 1, border_radius=5)
+            back_text = FONT_SMALL.render("Back to Menu (Esc)", True, BLACK)
+            text_rect = back_text.get_rect(center=back_button_rect.center)
+            screen.blit(back_text, text_rect)
+
+            # Calculate elapsed time for the current generation
+            elapsed_seconds = (pygame.time.get_ticks() - generation_start_time) / 1000.0
+
+            stats = [
+                f"FPS: {clock.get_fps():.1f}",
+                f"Generation: {generation}",
+                # Corrected Time Display: Uses real-time and fixed decimal place
+                f"Time: {elapsed_seconds:.2f}s / {GENERATION_DURATION:.0f}s",
+                f"Cars Alive: {alive_count}/{NUM_CARS}",
+                f"Best Fitness: {best_fitness:.2f}",
+                f"Current Best: {best_fitness_current:.2f}",
+            ]
+            if best_car:
+                stats.extend([
+                    f"Speed: {best_car.speed:.2f}",
+                    f"Lap Count: {best_car.lap_count}",
+                    f"Checkpoint: {best_car.current_checkpoint}/{len(checkpoints)}",
+                    f"Distance: {best_car.distance_traveled:.1f}"
+                ])
+            if track_type == "impossible":
+                stats.append(f"Current Track: {current_track}")
+
+            for i, text in enumerate(stats):
+                text_surface = FONT_SMALL.render(text, True, BLACK)
+                screen.blit(text_surface, (10, 10 + i * 24))
+
+            # Generation End Condition: Based on real-time timer
+            if elapsed_seconds >= GENERATION_DURATION or alive_count == 0:
+                best_fitness_current = max(car.fitness for car in cars) if cars else -float('inf')
+                avg_fitness = sum(car.fitness for car in cars) / NUM_CARS if cars else 0
+                generation_stats.append({
+                    'generation': generation,
+                    'best_fitness': best_fitness_current,
+                    'avg_fitness': avg_fitness,
+                    'alive_count': alive_count
+                })
+
+                if track_type == "impossible":
+                    available_tracks = [t for t in track_options if t != previous_track]
+                    new_track = random.choice(available_tracks)
+                    current_track = new_track
+                    previous_track = current_track
+                    set_track(current_track)
+                else:
+                    set_track(current_track)
+
+                new_generation = []
+                elite_count = max(3, NUM_CARS // 10)
+                elite_nns = elitism(cars, elite_count)
+                for nn in elite_nns:
+                    new_generation.append(Car(nn))
+
+                top_cars = sorted(cars, key=lambda x: x.fitness, reverse=True)[:5]
+                for i, top_car in enumerate(top_cars):
+                    num_mutants = 2
+                    if i == 0:
+                        num_mutants += 2
+                    for _ in range(num_mutants):
+                        mutant_nn = top_car.nn.mutate()
+                        new_generation.append(Car(mutant_nn))
+
+                while len(new_generation) < NUM_CARS:
+                    parent1 = select_parents(cars, "tournament")
+                    parent2 = select_parents(cars, "tournament")
+                    child_nn = parent1.nn.crossover(parent2.nn) if random.random() < 0.85 else (parent1.nn.clone() if random.random() < 0.5 else parent2.nn.clone())
+                    mutation_rate = MUTATION_RATE * (1.0 - min(0.5, generation / 100))
+                    child_nn = child_nn.mutate(mutation_rate=mutation_rate)
+                    new_generation.append(Car(child_nn))
+
+                cars = new_generation
+                generation += 1
+                is_first_frame = True
+                generation_start_time = pygame.time.get_ticks() # Reset timer for new generation
+
+                gen_msg = f"Generation {generation} starting!"
+                gen_text = FONT_MEDIUM.render(gen_msg, True, BLUE)
+                screen.blit(gen_text, (SIM_WIDTH // 2 - gen_text.get_width() // 2, 50))
+                pygame.display.flip()
+                pygame.time.delay(1000)
+
+            pygame.display.flip()
 
 if __name__ == "__main__":
     run_simulation()
