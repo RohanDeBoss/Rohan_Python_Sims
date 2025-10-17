@@ -911,6 +911,9 @@ def run_simulation():
         simulation_running = True
         while simulation_running:
             delta_time = clock.tick(60) / 1000.0
+            
+            # <<< THE ONLY CHANGE NEEDED IS THIS ONE LINE >>>
+            delta_time = min(delta_time, 0.05)  # Cap delta_time to 50ms (equivalent to 20 FPS)
 
             # Event Handling
             for event in pygame.event.get():
